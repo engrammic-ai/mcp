@@ -3,7 +3,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -55,7 +55,7 @@ def load_credentials(path: Path) -> dict[str, Any] | None:
         return None
 
     try:
-        return json.loads(path.read_text())
+        return cast(dict[str, Any], json.loads(path.read_text()))
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to load credentials", path=str(path), error=str(e))
         return None

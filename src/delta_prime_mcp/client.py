@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import structlog
@@ -149,4 +149,4 @@ class DeltaPrimeClient:
                 request_id=request_id,
             )
 
-        return resp.json()
+        return cast(dict[str, Any], resp.json())

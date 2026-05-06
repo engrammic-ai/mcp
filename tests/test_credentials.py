@@ -4,8 +4,6 @@ import json
 import stat
 from pathlib import Path
 
-import pytest
-
 from delta_prime_mcp.credentials import load_credentials, store_credentials
 
 

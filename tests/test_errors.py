@@ -1,6 +1,5 @@
 """Tests for error handling and sanitization."""
 
-import pytest
 
 from delta_prime_mcp.errors import (
     DeltaPrimeError,
