@@ -2,17 +2,23 @@
 
 from typing import Any, Literal
 
-from delta_prime_mcp.client import DeltaPrimeClient
-from delta_prime_mcp.config import get_settings
+from engrammic_mcp.client import EngrammicClient
+from engrammic_mcp.config import get_settings
 
-_client: DeltaPrimeClient | None = None
+_client: EngrammicClient | None = None
 
 
-def _get_client() -> DeltaPrimeClient:
+def _get_client() -> EngrammicClient:
     global _client
     if _client is None:
-        _client = DeltaPrimeClient(get_settings())
+        _client = EngrammicClient(get_settings())
     return _client
+
+
+def reset_client() -> None:
+    """Reset the singleton client. For testing only."""
+    global _client
+    _client = None
 
 
 async def admin(

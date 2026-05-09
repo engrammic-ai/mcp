@@ -1,4 +1,4 @@
-"""Secure credential storage for OAuth tokens."""
+"""Secure credential storage for Engrammic OAuth tokens."""
 
 import json
 from datetime import UTC, datetime

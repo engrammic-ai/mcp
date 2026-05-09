@@ -1,4 +1,4 @@
-"""HTTP client for Delta Prime backend communication."""
+"""HTTP client for Engrammic backend communication."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from typing import Any, cast
 import httpx
 import structlog
 
-from delta_prime_mcp.config import Settings
-from delta_prime_mcp.credentials import load_credentials, store_credentials
-from delta_prime_mcp.errors import (
-    DeltaPrimeError,
+from engrammic_mcp.config import Settings
+from engrammic_mcp.credentials import load_credentials, store_credentials
+from engrammic_mcp.errors import (
+    EngrammicError,
     sanitize_error_message,
     status_to_error_code,
 )
@@ -38,8 +38,8 @@ def reset_http_client() -> None:
     _http_client = None
 
 
-class DeltaPrimeClient:
-    """Client for Delta Prime backend API."""
+class EngrammicClient:
+    """Client for Engrammic backend API."""
 
     def __init__(self, settings: Settings) -> None:
         self.base_url = settings.backend_url.rstrip("/")
@@ -109,7 +109,7 @@ class DeltaPrimeClient:
         try:
             client = get_http_client()
             resp = await client.post(
-                f"{self.base_url}/v1/auth/token/refresh",
+                f"{self.base_url}/v1/oauth/token",
                 json={"refresh_token": self._refresh_token},
             )
             if resp.status_code == 200:
@@ -143,7 +143,7 @@ class DeltaPrimeClient:
                 raw_message=raw_message,
             )
 
-            raise DeltaPrimeError(
+            raise EngrammicError(
                 code=status_to_error_code(resp.status_code),
                 message=sanitize_error_message(resp.status_code, raw_message),
                 request_id=request_id,

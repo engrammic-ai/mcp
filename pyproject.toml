@@ -1,11 +1,11 @@
 [project]
-name = "delta-prime-mcp"
-version = "0.1.0"
-description = "MCP server for Delta Prime context management"
+name = "engrammic-mcp"
+version = "0.2.0"
+description = "MCP server for Engrammic context management"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
-authors = [{ name = "Delta Prime", email = "hello@deltaprime.ai" }]
+authors = [{ name = "Engrammic", email = "hello@engrammic.com" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -29,14 +29,14 @@ dev = [
 ]
 
 [project.scripts]
-delta-prime-mcp = "delta_prime_mcp.__main__:main"
+engrammic-mcp = "engrammic_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/delta_prime_mcp"]
+packages = ["src/engrammic_mcp"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

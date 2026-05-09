@@ -1,10 +1,10 @@
-"""Error handling and sanitization for Delta Prime MCP."""
+"""Error handling and sanitization for Engrammic MCP."""
 
 from typing import Any
 
 
-class DeltaPrimeError(Exception):
-    """Error from Delta Prime backend, sanitized for agent consumption."""
+class EngrammicError(Exception):
+    """Error from Engrammic backend, sanitized for agent consumption."""
 
     def __init__(self, code: str, message: str, request_id: str) -> None:
         self.code = code

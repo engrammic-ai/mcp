@@ -1,6 +1,6 @@
-"""MCP tool implementations for Delta Prime."""
+"""MCP tool implementations for Engrammic."""
 
-from delta_prime_mcp.tools import (
+from engrammic_mcp.tools import (
     context_admin,
     context_link,
     context_recall,
