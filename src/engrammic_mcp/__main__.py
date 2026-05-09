@@ -1,28 +1,6 @@
-# src/delta_prime_mcp/__main__.py
-"""Entry point for Delta Prime MCP server."""
+"""Entry point for Engrammic MCP server."""
 
-import sys
-
-import structlog
-
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.BoundLogger,
-    context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
-)
-
-
-def main() -> None:
-    """Run the Delta Prime MCP server."""
-    from delta_prime_mcp.server import create_server
-
-    server = create_server()
-    server.run()
-
+from engrammic_mcp.cli import main
 
 if __name__ == "__main__":
     main()
