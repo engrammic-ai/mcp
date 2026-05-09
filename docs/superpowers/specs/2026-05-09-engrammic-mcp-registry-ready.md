@@ -51,8 +51,8 @@ Each tool follows the existing pattern:
 engrammic-mcp login
 ```
 - Starts local HTTP server on ephemeral port (e.g., 18234)
-- Opens browser to `{backend_url}/oauth/authorize?redirect_uri=http://localhost:{port}/callback`
-- Receives callback with auth code, exchanges for tokens via backend
+- Opens browser to `{backend_url}/v1/oauth/authorize?redirect_uri=http://localhost:{port}/callback`
+- Receives callback with auth code, exchanges for tokens via `POST {backend_url}/v1/oauth/token`
 - Stores tokens to `~/.engrammic/credentials.json` with 600 permissions
 - Prints success message with org name
 - Shuts down local server after callback received (or 120s timeout)
@@ -63,6 +63,11 @@ engrammic-mcp --version  # prints version
 engrammic-mcp --help     # prints usage
 engrammic-mcp            # runs MCP server (default)
 ```
+
+**CLI structure:**
+- `cli.py` contains argument parsing and command dispatch
+- `__main__.py` imports and calls `cli.main()`
+- Default (no args) runs the MCP server via `server.py`
 
 **Startup health check:**
 - On server start, call `context_admin(action="whoami")` 
