@@ -80,7 +80,9 @@ class TestContextLink:
             url="https://api.test.com/v1/context/link",
             json={"edge_id": "edge123"},
         )
-        result = await context_link.link(source_id="node1", target_id="node2", relation="RELATES_TO")
+        result = await context_link.link(
+            source_id="node1", target_id="node2", relation="RELATES_TO"
+        )
         assert result["edge_id"] == "edge123"
 
 
@@ -142,7 +144,9 @@ class TestContextRejectBelief:
             url="https://api.test.com/v1/context/reject_belief",
             json={"proposed_belief_id": "p1", "status": "rejected"},
         )
-        result = await context_reject_belief.reject_belief(belief_id="p1", reason="Not enough evidence")
+        result = await context_reject_belief.reject_belief(
+            belief_id="p1", reason="Not enough evidence"
+        )
         assert result["status"] == "rejected"
 
 

@@ -1,8 +1,8 @@
 """Pytest fixtures for engrammic-mcp tests."""
 
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 
