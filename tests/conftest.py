@@ -1,8 +1,8 @@
-"""Pytest fixtures for delta-prime-mcp tests."""
+"""Pytest fixtures for engrammic-mcp tests."""
 
 import tempfile
-from collections.abc import Generator
 from pathlib import Path
+from typing import Generator
 
 import pytest
 
@@ -17,8 +17,8 @@ def temp_credentials_dir() -> Generator[Path, None, None]:
 @pytest.fixture
 def mock_settings(temp_credentials_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Configure settings to use temp directory."""
-    monkeypatch.setenv("DELTA_PRIME_BACKEND_URL", "http://localhost:8000")
-    monkeypatch.setenv("DELTA_PRIME_CREDENTIALS_PATH", str(temp_credentials_dir / "creds.json"))
+    monkeypatch.setenv("ENGRAMMIC_BACKEND_URL", "http://localhost:8000")
+    monkeypatch.setenv("ENGRAMMIC_CREDENTIALS_PATH", str(temp_credentials_dir / "creds.json"))
 
-    from delta_prime_mcp import config
+    from engrammic_mcp import config
     config._settings = None

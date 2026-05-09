@@ -1,8 +1,8 @@
 """Tests for error handling and sanitization."""
 
 
-from delta_prime_mcp.errors import (
-    DeltaPrimeError,
+from engrammic_mcp.errors import (
+    EngrammicError,
     sanitize_error_message,
     status_to_error_code,
 )
@@ -46,9 +46,9 @@ class TestSanitizeErrorMessage:
         assert sanitize_error_message(429, None) == "Rate limit exceeded - please slow down"
 
 
-class TestDeltaPrimeError:
+class TestEngrammicError:
     def test_to_dict(self) -> None:
-        err = DeltaPrimeError(
+        err = EngrammicError(
             code="invalid_request",
             message="Bad input",
             request_id="req-123",

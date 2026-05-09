@@ -4,7 +4,7 @@ import json
 import stat
 from pathlib import Path
 
-from delta_prime_mcp.credentials import load_credentials, store_credentials
+from engrammic_mcp.credentials import load_credentials, store_credentials
 
 
 class TestStoreCredentials:

@@ -1,11 +1,11 @@
-"""Tests for Delta Prime HTTP client."""
+"""Tests for Engrammic HTTP client."""
 
 import pytest
 from pytest_httpx import HTTPXMock
 
-from delta_prime_mcp.client import DeltaPrimeClient, get_http_client, reset_http_client
-from delta_prime_mcp.config import Settings
-from delta_prime_mcp.errors import DeltaPrimeError
+from engrammic_mcp.client import EngrammicClient, get_http_client, reset_http_client
+from engrammic_mcp.config import Settings
+from engrammic_mcp.errors import EngrammicError
 
 
 @pytest.fixture(autouse=True)
@@ -30,19 +30,19 @@ class TestGetHttpClient:
         assert client1 is client2
 
 
-class TestDeltaPrimeClient:
+class TestEngrammicClient:
     async def test_post_success(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://api.test.com/v1/context/store",
             json={"node_id": "abc123"},
         )
-        client = DeltaPrimeClient(settings)
+        client = EngrammicClient(settings)
         result = await client.post("/v1/context/store", {"content": "test"})
         assert result == {"node_id": "abc123"}
 
     async def test_includes_auth_header(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(json={})
-        client = DeltaPrimeClient(settings)
+        client = EngrammicClient(settings)
         await client.post("/v1/test", {})
 
         request = httpx_mock.get_request()
@@ -51,7 +51,7 @@ class TestDeltaPrimeClient:
 
     async def test_includes_request_id(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(json={})
-        client = DeltaPrimeClient(settings)
+        client = EngrammicClient(settings)
         await client.post("/v1/test", {})
 
         request = httpx_mock.get_request()
@@ -65,9 +65,9 @@ class TestDeltaPrimeClient:
             status_code=500,
             json={"message": "Traceback: internal error in memgraph"},
         )
-        client = DeltaPrimeClient(settings)
+        client = EngrammicClient(settings)
 
-        with pytest.raises(DeltaPrimeError) as exc_info:
+        with pytest.raises(EngrammicError) as exc_info:
             await client.post("/v1/test", {})
 
         assert exc_info.value.code == "internal_error"
@@ -77,7 +77,7 @@ class TestDeltaPrimeClient:
     async def test_retries_on_401_with_refresh(
         self, settings: Settings, httpx_mock: HTTPXMock, temp_credentials_dir
     ) -> None:
-        from delta_prime_mcp.credentials import store_credentials
+        from engrammic_mcp.credentials import store_credentials
 
         store_credentials("old_token", "refresh_123", settings.credentials_path)
 
@@ -92,7 +92,7 @@ class TestDeltaPrimeClient:
             status_code=401,
         )
         httpx_mock.add_response(
-            url="https://api.test.com/v1/auth/token/refresh",
+            url="https://api.test.com/v1/oauth/token",
             json={"access_token": "new_token", "refresh_token": "refresh_456"},
         )
         httpx_mock.add_response(
@@ -100,7 +100,7 @@ class TestDeltaPrimeClient:
             json={"success": True},
         )
 
-        client = DeltaPrimeClient(settings_no_key)
+        client = EngrammicClient(settings_no_key)
         result = await client.post("/v1/test", {})
 
         assert result == {"success": True}
