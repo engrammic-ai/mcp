@@ -1,30 +1,39 @@
-# Engrammic MCP Server
+# Engrammic MCP
 
-MCP server for [Engrammic](https://engrammic.com) context management. Connects AI agents to your Engrammic workspace.
+Persistent memory for AI agents.
 
-## Installation
+## Quickstart
 
-```bash
-pip install engrammic-mcp
-```
+1. Install from [MCP Registry](https://registry.mcp.io/engrammic) or `uvx engrammic-mcp`
+2. Set `ENGRAMMIC_API_KEY` (get one at [engrammic.ai](https://engrammic.ai))
+3. Done
+
+## Examples
+
+Store something:
+> "Remember that the user prefers dark mode"
+
+Recall it later:
+> "What do I know about user preferences?"
+
+## Tools
+
+| Tool | Purpose |
+|------|---------|
+| `context_store` | Store to memory/knowledge/wisdom |
+| `context_recall` | Search and retrieve context |
+| `context_link` | Connect concepts |
+| `context_admin` | Usage info, provenance, history |
+| `context_belief_state` | Query active hypotheses |
+| `context_crystallize` | Promote hypotheses to commitments |
 
 ## Configuration
-
-Set your API key:
 
 ```bash
 export ENGRAMMIC_API_KEY=eng_xxx
 ```
 
-Or use OAuth (opens browser on first use):
-
-```bash
-engrammic-mcp login
-```
-
-## Usage with Claude Desktop
-
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Or add to Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
@@ -41,36 +50,13 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 
 ## Self-Hosting
 
-Point to your own backend:
+For local/offline usage, see [engrammic-engine](https://github.com/engrammic/engine).
 
-```bash
-export ENGRAMMIC_BACKEND_URL=http://localhost:8000
-```
+## Learn More
 
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `context_store` | Store memories, knowledge, decisions, reasoning |
-| `context_recall` | Search and retrieve context |
-| `context_link` | Create relationships between nodes |
-| `context_admin` | Usage info, provenance, history |
-| `context_belief_state` | Query active hypotheses |
-| `context_update_belief` | Update hypothesis confidence |
-| `context_crystallize` | Promote hypotheses to commitments |
-| `context_accept_belief` | Accept proposed beliefs |
-| `context_reject_belief` | Reject proposed beliefs |
-| `context_skills` | List and search skills |
-
-## CLI Commands
-
-```bash
-engrammic-mcp --version   # Show version
-engrammic-mcp --help      # Show help
-engrammic-mcp login       # Authenticate with Engrammic
-engrammic-mcp             # Run MCP server (default)
-engrammic-mcp serve       # Run MCP server (explicit)
-```
+- [EAG Manifesto](https://github.com/engrammic/primitives/blob/main/docs/manifesto.md) - the paradigm explained
+- [EAG Concepts](docs/eag-concepts.md) - understand the memory model
+- Using Claude Code? Copy [skills/](https://github.com/engrammic/context-service/tree/main/skills) to `~/.claude/skills/` for EAG workflow guidance
 
 ## License
 
