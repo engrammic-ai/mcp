@@ -11,6 +11,7 @@ from engrammic_mcp.tools import (
     context_skills,
     context_store,
     context_update_belief,
+    remember,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "context_skills",
     "context_store",
     "context_update_belief",
+    "remember",
 ]

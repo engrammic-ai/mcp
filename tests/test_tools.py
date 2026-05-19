@@ -16,6 +16,7 @@ from engrammic_mcp.tools import (
     context_skills,
     context_store,
     context_update_belief,
+    remember,
 )
 
 
@@ -32,6 +33,7 @@ def reset_clients() -> None:
     context_accept_belief.reset_client()
     context_reject_belief.reset_client()
     context_skills.reset_client()
+    remember.reset_client()
 
 
 @pytest.fixture
@@ -51,6 +53,7 @@ def settings(temp_credentials_dir, monkeypatch) -> Settings:
     monkeypatch.setattr("engrammic_mcp.tools.context_accept_belief.get_settings", lambda: s)
     monkeypatch.setattr("engrammic_mcp.tools.context_reject_belief.get_settings", lambda: s)
     monkeypatch.setattr("engrammic_mcp.tools.context_skills.get_settings", lambda: s)
+    monkeypatch.setattr("engrammic_mcp.tools.remember.get_settings", lambda: s)
     return s
 
 
@@ -158,3 +161,13 @@ class TestContextSkills:
         )
         result = await context_skills.skills(action="list")
         assert len(result["skills"]) == 1
+
+
+class TestRemember:
+    async def test_remember_basic(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://api.test.com/v1/context/store",
+            json={"node_id": "test-node-id", "created_at": "2026-05-19T00:00:00Z"},
+        )
+        result = await remember.remember(content="user prefers dark mode")
+        assert result["node_id"] == "test-node-id"
