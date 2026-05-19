@@ -8,7 +8,7 @@ import pytest
 
 
 @pytest.fixture
-def temp_credentials_dir() -> Generator[Path, None, None]:
+def temp_credentials_dir() -> Generator[Path]:
     """Temporary directory for credential storage tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
