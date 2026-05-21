@@ -33,6 +33,16 @@ impl Tool {
                 id: "antigravity",
                 config_path: home.join(".antigravity/mcp.json"),
             },
+            Tool {
+                name: "Gemini CLI",
+                id: "gemini",
+                config_path: home.join(".gemini/settings.json"),
+            },
+            Tool {
+                name: "Pi Agents",
+                id: "pi",
+                config_path: home.join(".pi/agent/mcp.json"),
+            },
         ]
     }
 

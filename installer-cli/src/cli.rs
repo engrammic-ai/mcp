@@ -12,7 +12,7 @@ pub struct Cli {
     #[arg(short = 'y', long = "yes", global = true)]
     pub yes: bool,
 
-    /// Specify tool directly (claude, cursor, windsurf, antigravity)
+    /// Specify tool directly (claude, cursor, windsurf, antigravity, gemini, pi)
     #[arg(long, global = true)]
     pub tool: Option<String>,
 }
