@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="engrammic-ai/mcp-client"
+REPO="engrammic-ai/mcp"
 BINARY="engrammic-install"
 
 echo ""

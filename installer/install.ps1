@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Repo = "engrammic-ai/mcp-client"
+$Repo = "engrammic-ai/mcp"
 $Binary = "engrammic-install"
 
 Write-Host ""
