@@ -1,0 +1,24 @@
+$ErrorActionPreference = "Stop"
+
+$Repo = "engrammic-ai/mcp-client"
+$Binary = "engrammic-install"
+
+Write-Host ""
+Write-Host "Engrammic MCP Installer"
+Write-Host ""
+
+# Windows is always x86_64-pc-windows-msvc for now
+$Target = "x86_64-pc-windows-msvc"
+Write-Host "Detected: $Target"
+
+$ReleaseUrl = "https://github.com/$Repo/releases/latest/download/$Binary-$Target.exe"
+
+# Download to temp
+$TempDir = $env:TEMP
+$Installer = Join-Path $TempDir "$Binary.exe"
+
+Write-Host "Downloading installer..."
+Invoke-WebRequest -Uri $ReleaseUrl -OutFile $Installer -UseBasicParsing
+
+# Run installer, passing through all arguments
+& $Installer @args

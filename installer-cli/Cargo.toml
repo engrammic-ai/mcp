@@ -1,0 +1,21 @@
+[package]
+name = "engrammic-install"
+version = "0.1.0"
+edition = "2021"
+description = "Engrammic MCP installer CLI"
+license = "Apache-2.0"
+repository = "https://github.com/engrammic-ai/mcp-client"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dialoguer = "0.11"
+colored = "2"
+dirs = "5"
+anyhow = "1"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"

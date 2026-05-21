@@ -47,3 +47,6 @@ htmlcov/
 
 # Credentials (never commit)
 credentials.json
+
+# Rust
+installer-cli/target/

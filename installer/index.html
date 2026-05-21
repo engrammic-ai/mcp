@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Install Engrammic MCP</title>
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --fg: #e5e5e5;
+            --muted: #737373;
+            --accent: #3b82f6;
+            --code-bg: #1a1a1a;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        .container {
+            max-width: 600px;
+            width: 100%;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 500;
+            margin-bottom: 2rem;
+        }
+        .install-block {
+            background: var(--code-bg);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .install-block h2 {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--muted);
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .code {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.875rem;
+            background: var(--bg);
+            padding: 1rem;
+            border-radius: 4px;
+            overflow-x: auto;
+            cursor: pointer;
+            position: relative;
+        }
+        .code:hover::after {
+            content: 'Click to copy';
+            position: absolute;
+            right: 0.5rem;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .code.copied::after {
+            content: 'Copied!';
+            color: var(--accent);
+        }
+        .or {
+            text-align: center;
+            color: var(--muted);
+            margin: 1.5rem 0;
+            font-size: 0.875rem;
+        }
+        .pypi-block {
+            background: var(--code-bg);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+        .pypi-block h2 {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--muted);
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .link {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .link:hover {
+            text-decoration: underline;
+        }
+        .footer {
+            margin-top: 2rem;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Install Engrammic MCP</h1>
+
+        <div class="install-block" id="unix-block">
+            <h2>macOS / Linux</h2>
+            <div class="code" onclick="copyToClipboard(this, 'curl -fsSL https://get.engrammic.ai/install.sh | sh')">
+                curl -fsSL https://get.engrammic.ai/install.sh | sh
+            </div>
+        </div>
+
+        <div class="install-block" id="windows-block">
+            <h2>Windows (PowerShell)</h2>
+            <div class="code" onclick="copyToClipboard(this, 'irm https://get.engrammic.ai/install.ps1 | iex')">
+                irm https://get.engrammic.ai/install.ps1 | iex
+            </div>
+        </div>
+
+        <div class="or">or</div>
+
+        <div class="pypi-block">
+            <h2>Via PyPI</h2>
+            <div class="code" onclick="copyToClipboard(this, 'uvx engrammic-mcp install')">
+                uvx engrammic-mcp install
+            </div>
+        </div>
+
+        <div class="footer">
+            <a class="link" href="https://engrammic.ai/docs">Documentation</a>
+        </div>
+    </div>
+
+    <script>
+        function copyToClipboard(el, text) {
+            navigator.clipboard.writeText(text);
+            el.classList.add('copied');
+            setTimeout(() => el.classList.remove('copied'), 2000);
+        }
+    </script>
+</body>
+</html>

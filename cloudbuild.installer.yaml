@@ -1,0 +1,8 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '$_IMAGE', '-f', 'installer/Dockerfile', 'installer']
+  - name: gcr.io/cloud-builders/docker
+    args: ['push', '$_IMAGE']
+images: ['$_IMAGE']
+substitutions:
+  _IMAGE: europe-north1-docker.pkg.dev/engrammic/engrammic/get-engrammic:latest

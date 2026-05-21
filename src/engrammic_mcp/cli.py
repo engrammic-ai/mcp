@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import http.server
+import json
 import sys
 import threading
 import urllib.parse
 import webbrowser
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -19,6 +21,15 @@ from engrammic_mcp.config import get_settings
 from engrammic_mcp.credentials import store_credentials
 
 logger = structlog.get_logger(__name__)
+
+ENDPOINT = "https://beta.engrammic.ai/mcp/"
+
+TOOLS = [
+    ("Claude Code", Path.home() / ".claude" / "settings.json"),
+    ("Cursor", Path.home() / ".cursor" / "mcp.json"),
+    ("Windsurf", Path.home() / ".windsurf" / "mcp.json"),
+    ("Antigravity", Path.home() / ".antigravity" / "mcp.json"),
+]
 
 
 def main() -> None:
@@ -36,13 +47,74 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("login", help="Authenticate with Engrammic")
     subparsers.add_parser("serve", help="Run the MCP server")
+    subparsers.add_parser("install", help="Configure MCP for your tool")
 
     args = parser.parse_args()
 
     if args.command == "login":
         _run_login()
+    elif args.command == "install":
+        _run_install()
     elif args.command == "serve" or args.command is None:
         _run_server()
+
+
+def _run_install() -> None:
+    """Run the interactive install flow."""
+    print()
+    print("Engrammic MCP Installer")
+    print()
+    print("Select your tool:")
+    for i, (name, _) in enumerate(TOOLS, 1):
+        print(f"[{i}] {name}")
+    print(f"[{len(TOOLS) + 1}] Other / Print JSON")
+    print()
+
+    try:
+        choice = input("Choice: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+
+    try:
+        choice_num = int(choice)
+    except ValueError:
+        print("Invalid choice", file=sys.stderr)
+        sys.exit(1)
+
+    if choice_num == len(TOOLS) + 1:
+        print()
+        print("Add this to your MCP config:")
+        print()
+        print(json.dumps({"engrammic": {"type": "sse", "url": ENDPOINT}}, indent=2))
+        return
+
+    if not 1 <= choice_num <= len(TOOLS):
+        print("Invalid choice", file=sys.stderr)
+        sys.exit(1)
+
+    tool_name, config_path = TOOLS[choice_num - 1]
+    print()
+    print(f"Installing for {tool_name}...")
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+        except json.JSONDecodeError:
+            config = {}
+    else:
+        config = {}
+
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+
+    config["mcpServers"]["engrammic"] = {"type": "sse", "url": ENDPOINT}
+
+    config_path.write_text(json.dumps(config, indent=2))
+    print(f"Added engrammic to {config_path}")
+    print("Done! Tools available: remember, recall, learn, believe, trace, link")
 
 
 def _run_login() -> None:

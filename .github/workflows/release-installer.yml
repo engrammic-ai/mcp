@@ -1,0 +1,76 @@
+name: Release Installer
+
+on:
+  push:
+    tags:
+      - 'installer-v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: engrammic-install
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: engrammic-install
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: engrammic-install
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: engrammic-install.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        working-directory: installer-cli
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          src="installer-cli/target/${{ matrix.target }}/release/${{ matrix.artifact }}"
+          dst="engrammic-install-${{ matrix.target }}${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }}"
+          cp "$src" "$dst"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engrammic-install-${{ matrix.target }}
+          path: engrammic-install-${{ matrix.target }}*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
