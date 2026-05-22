@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod skills;
 mod tools;
 
 use anyhow::Result;
