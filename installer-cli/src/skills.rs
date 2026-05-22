@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use flate2::read::GzDecoder;
+use tar::Archive;
 
 const SKILL_PREFIX: &str = "engrammic-";
 
@@ -74,6 +76,21 @@ pub fn remove_skills(dest: &Path) -> Result<usize> {
     Ok(count)
 }
 
+pub fn unpack_tarball(gz_bytes: &[u8], dest: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dest)?;
+    let decoder = GzDecoder::new(gz_bytes);
+    let mut archive = Archive::new(decoder);
+    archive
+        .unpack(dest)
+        .context("failed to unpack skills tarball")?;
+    // GitHub tarballs contain exactly one top-level directory.
+    fs::read_dir(dest)?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.is_dir())
+        .context("skills tarball had no top-level directory")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +141,42 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(!dir.path().join("engrammic-recall").exists());
         assert!(dir.path().join("keep-me").exists());
+    }
+
+    #[test]
+    fn unpack_tarball_extracts_top_level_dir() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        // Build an in-memory tar.gz with one top-level dir and a file.
+        let mut tar_buf = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_buf);
+            let content = b"hello";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "skills-main/engrammic-recall/SKILL.md",
+                    &content[..],
+                )
+                .unwrap();
+            builder.finish().unwrap();
+        }
+        let mut gz = Vec::new();
+        {
+            let mut encoder = GzEncoder::new(&mut gz, Compression::default());
+            encoder.write_all(&tar_buf).unwrap();
+            encoder.finish().unwrap();
+        }
+
+        let dest = tempfile::tempdir().unwrap();
+        let top = unpack_tarball(&gz, dest.path()).unwrap();
+        assert!(top.ends_with("skills-main"));
+        assert!(top.join("engrammic-recall/SKILL.md").exists());
     }
 }
