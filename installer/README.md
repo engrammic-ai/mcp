@@ -10,6 +10,19 @@ Scripts and landing page for `get.engrammic.ai`.
 - `Dockerfile` - nginx container for Cloud Run
 - `nginx.conf` - serves scripts as text/plain
 
+## Skills
+
+The installer also offers to install the 21 open-source Engrammic skills from
+the public `engrammic-ai/skills` repo. During `install` it prompts after
+writing MCP config (opt-out, default yes) and lets you choose destinations:
+
+- `~/.claude/skills/` (Claude Code, native)
+- `~/.agents/skills/` (cross-harness: Codex, Gemini CLI, Cursor, Pi Agents)
+- `./.agents/skills/` (project-local, current directory)
+
+`update` refreshes skills in any destination that already has them.
+`uninstall` removes them. `status` shows per-destination counts.
+
 ## Deployment (Cloud Run)
 
 ```bash
