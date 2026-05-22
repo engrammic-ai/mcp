@@ -17,8 +17,8 @@ fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Commands::Install) {
         Commands::Install => install(cli.yes, cli.tool.as_deref()),
-        Commands::Update => update(cli.tool.as_deref()),
-        Commands::Uninstall => uninstall(cli.tool.as_deref()),
+        Commands::Update => update(cli.yes, cli.tool.as_deref()),
+        Commands::Uninstall => uninstall(cli.yes, cli.tool.as_deref()),
         Commands::Status => status(),
     }
 }
@@ -54,10 +54,10 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn update(tool_id: Option<&str>) -> Result<()> {
+fn update(yes: bool, tool_id: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let tools = select_tools(false, tool_id)?;
+    let tools = select_tools(yes, tool_id)?;
     for tool in &tools {
         if config::is_installed(&tool.config_path, ENDPOINT) {
             config::install(&tool.config_path, ENDPOINT)?;
@@ -89,10 +89,10 @@ fn update(tool_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn uninstall(tool_id: Option<&str>) -> Result<()> {
+fn uninstall(yes: bool, tool_id: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let tools = select_tools(false, tool_id)?;
+    let tools = select_tools(yes, tool_id)?;
     for tool in &tools {
         config::uninstall(&tool.config_path)?;
         println!("{} Removed engrammic from {}", "✓".green(), tool.name);

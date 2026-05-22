@@ -98,7 +98,12 @@ const SKILLS_TARBALL_URL: &str =
     "https://github.com/engrammic-ai/skills/archive/refs/heads/main.tar.gz";
 
 pub fn download_skills_tarball() -> Result<Vec<u8>> {
-    let resp = ureq::get(SKILLS_TARBALL_URL)
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(60))
+        .build();
+    let resp = agent
+        .get(SKILLS_TARBALL_URL)
         .call()
         .context("failed to download skills tarball")?;
     let mut bytes = Vec::new();
