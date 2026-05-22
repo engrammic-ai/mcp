@@ -1,3 +1,4 @@
+mod banner;
 mod cli;
 mod config;
 mod skills;
