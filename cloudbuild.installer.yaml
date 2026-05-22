@@ -4,5 +4,7 @@ steps:
   - name: gcr.io/cloud-builders/docker
     args: ['push', '$_IMAGE']
 images: ['$_IMAGE']
+options:
+  logging: CLOUD_LOGGING_ONLY
 substitutions:
   _IMAGE: europe-north1-docker.pkg.dev/engrammic/engrammic/get-engrammic:latest
