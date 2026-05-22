@@ -1,8 +1,11 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
+use indicatif::{ProgressBar, ProgressStyle};
 use tar::Archive;
 
 const SKILL_PREFIX: &str = "engrammic-";
@@ -91,6 +94,50 @@ pub fn unpack_tarball(gz_bytes: &[u8], dest: &Path) -> Result<PathBuf> {
         .context("skills tarball had no top-level directory")
 }
 
+const SKILLS_TARBALL_URL: &str =
+    "https://github.com/engrammic-ai/skills/archive/refs/heads/main.tar.gz";
+
+pub fn download_skills_tarball() -> Result<Vec<u8>> {
+    let resp = ureq::get(SKILLS_TARBALL_URL)
+        .call()
+        .context("failed to download skills tarball")?;
+    let mut bytes = Vec::new();
+    resp.into_reader()
+        .read_to_end(&mut bytes)
+        .context("failed to read skills tarball body")?;
+    Ok(bytes)
+}
+
+/// Downloads, unpacks, and copies skills into each destination.
+/// Returns one (destination, skill count) pair per destination.
+pub fn install_skills(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)>> {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::with_template("  {spinner} {msg}")
+            .expect("valid spinner template"),
+    );
+    spinner.enable_steady_tick(Duration::from_millis(80));
+    spinner.set_message("Downloading skills...");
+
+    let bytes = download_skills_tarball()?;
+    spinner.finish_and_clear();
+
+    let tmp = std::env::temp_dir().join("engrammic-skills-unpack");
+    if tmp.exists() {
+        fs::remove_dir_all(&tmp).ok();
+    }
+    let src = unpack_tarball(&bytes, &tmp)?;
+
+    let mut results = Vec::new();
+    for dest in dests {
+        let count = copy_skills(&src, dest)?;
+        results.push((dest.clone(), count));
+    }
+
+    fs::remove_dir_all(&tmp).ok();
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +148,15 @@ mod tests {
         let dir = root.join(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+    }
+
+    #[test]
+    #[ignore = "hits the network; run with --ignored"]
+    fn download_skills_tarball_returns_gzip() {
+        let bytes = download_skills_tarball().unwrap();
+        // gzip magic number
+        assert_eq!(&bytes[0..2], &[0x1f, 0x8b]);
+        assert!(bytes.len() > 1000);
     }
 
     #[test]
