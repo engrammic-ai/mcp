@@ -6,26 +6,28 @@ Most agent memory is a bag of text chunks. Engrammic organizes memory into cogni
 
 ## Quickstart
 
-```bash
-uvx engrammic-mcp
-```
-
-Set your API key:
+Install with one command:
 
 ```bash
-export ENGRAMMIC_API_KEY=eng_xxx  # join waitlist at engrammic.ai
+curl -fsSL https://get.engrammic.ai/install.sh | sh
 ```
 
-Or add to Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Windows (PowerShell):
+
+```powershell
+irm https://get.engrammic.ai/install.ps1 | iex
+```
+
+The installer detects your agent harnesses (Claude Code, Cursor, Codex, Gemini CLI, and more), wires Engrammic in as an MCP server, and optionally installs the Engrammic skills. The first time your agent connects, Engrammic opens an OAuth sign-in flow in your browser.
+
+To configure a harness by hand, add the MCP server directly:
 
 ```json
 {
   "mcpServers": {
     "engrammic": {
-      "command": "engrammic-mcp",
-      "env": {
-        "ENGRAMMIC_API_KEY": "eng_xxx"
-      }
+      "type": "sse",
+      "url": "https://beta.engrammic.ai/mcp/"
     }
   }
 }
@@ -57,7 +59,7 @@ Trace why you believe something:
 
 ## Self-Hosting
 
-For local/offline usage without an API key, see [engrammic-engine](https://github.com/engrammic-ai/engine).
+For fully local, offline usage, see [engrammic-engine](https://github.com/engrammic-ai/engine).
 
 ## Learn More
 
