@@ -6,12 +6,13 @@ on:
       - main
     paths:
       - "installer/**"
+  workflow_dispatch:
 
 jobs:
   deploy:
     name: Build and deploy get-engrammic
     runs-on: ubuntu-latest
-    if: github.repository == 'engrammic-ai/mcp-client'
+    if: github.repository == 'engrammic-ai/mcp'
 
     permissions:
       contents: read
