@@ -29,12 +29,13 @@ pub fn print_banner() {
     for (i, line) in banner_lines().iter().enumerate() {
         let padded = format!("   {:<width$}", line, width = INNER_WIDTH - 3);
         let colored = if i == 0 {
-            // Bold the product name at the start of the first line.
-            let rest = padded.replacen("engrammic", "", 1);
+            // Bold the product name; keep the rest of the line intact.
+            let name = "engrammic";
+            let rest = &line[name.len()..];
             format!(
                 "   {}{}",
-                "engrammic".truecolor(b0, b1, b2).bold(),
-                format!("{:<width$}", rest.trim_start(), width = INNER_WIDTH - 12)
+                name.truecolor(b0, b1, b2).bold(),
+                format!("{:<width$}", rest, width = INNER_WIDTH - 3 - name.len())
                     .truecolor(b0, b1, b2)
             )
         } else if i == 2 {
