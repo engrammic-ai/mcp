@@ -55,59 +55,72 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
 }
 
 fn update(tool_id: Option<&str>) -> Result<()> {
-    println!();
-    println!("{}", "Engrammic MCP Updater".bold());
-    println!();
+    banner::print_banner();
 
-    // Temporary bridge: select_tools returns Vec<Tool>; use first element.
-    // Task 10 will rewrite update() properly.
     let tools = select_tools(false, tool_id)?;
-    let tool = match tools.into_iter().next() {
-        Some(t) => t,
-        None => return Ok(()),
-    };
-
-    if !config::is_installed(&tool.config_path, ENDPOINT) {
-        println!("{} Engrammic not installed for {}", "!".yellow(), tool.name);
-        return Ok(());
+    for tool in &tools {
+        if config::is_installed(&tool.config_path, ENDPOINT) {
+            config::install(&tool.config_path, ENDPOINT)?;
+            println!("{} Updated engrammic in {}", "✓".green(), tool.name);
+        } else {
+            println!("{} Not installed for {}", "!".yellow(), tool.name);
+        }
     }
 
-    config::install(&tool.config_path, ENDPOINT)?;
-    println!("{} Updated engrammic in {}", "✓".green(), tool.config_path.display());
+    // Refresh skills in any destination that already has them.
+    let dests_with_skills: Vec<std::path::PathBuf> = SkillDest::all()
+        .into_iter()
+        .filter(|d| skills::count_skills(&d.path) > 0)
+        .map(|d| d.path)
+        .collect();
+
+    if !dests_with_skills.is_empty() {
+        let results = skills::install_skills(&dests_with_skills)?;
+        for (path, count) in results {
+            println!(
+                "{} Refreshed {} skills in {}",
+                "✓".green(),
+                count,
+                path.display()
+            );
+        }
+    }
 
     Ok(())
 }
 
 fn uninstall(tool_id: Option<&str>) -> Result<()> {
-    println!();
-    println!("{}", "Engrammic MCP Uninstaller".bold());
-    println!();
+    banner::print_banner();
 
-    // Temporary bridge: select_tools returns Vec<Tool>; use first element.
-    // Task 10 will rewrite uninstall() properly.
     let tools = select_tools(false, tool_id)?;
-    let tool = match tools.into_iter().next() {
-        Some(t) => t,
-        None => return Ok(()),
-    };
+    for tool in &tools {
+        config::uninstall(&tool.config_path)?;
+        println!("{} Removed engrammic from {}", "✓".green(), tool.name);
+    }
 
-    config::uninstall(&tool.config_path)?;
-    println!("{} Removed engrammic from {}", "✓".green(), tool.config_path.display());
+    for dest in SkillDest::all() {
+        let removed = skills::remove_skills(&dest.path)?;
+        if removed > 0 {
+            println!(
+                "{} Removed {} skills from {}",
+                "✓".green(),
+                removed,
+                dest.path.display()
+            );
+        }
+    }
 
     Ok(())
 }
 
 fn status() -> Result<()> {
-    println!();
-    println!("{}", "Engrammic MCP Status".bold());
-    println!();
+    banner::print_banner();
 
-    let tools = Tool::all();
+    println!("{}", "Harnesses".bold());
     let mut any_installed = false;
-
-    for tool in tools {
+    for tool in Tool::all() {
         let installed = config::is_installed(&tool.config_path, ENDPOINT);
-        let status = if installed {
+        let label = if installed {
             any_installed = true;
             "✓ installed".green()
         } else if tool.config_path.parent().map(|p| p.exists()).unwrap_or(false) {
@@ -115,8 +128,19 @@ fn status() -> Result<()> {
         } else {
             "- not detected".dimmed()
         };
+        println!("  {} {}", label, tool.name);
+    }
 
-        println!("  {} {}", status, tool.name);
+    println!();
+    println!("{}", "Skills".bold());
+    for dest in SkillDest::all() {
+        let count = skills::count_skills(&dest.path);
+        let label = if count > 0 {
+            format!("✓ {} skills", count).green()
+        } else {
+            "- none".dimmed()
+        };
+        println!("  {} {}", label, dest.name);
     }
 
     if !any_installed {
