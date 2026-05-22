@@ -127,7 +127,8 @@ pub fn install_skills(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)>> {
     let bytes = download_skills_tarball()?;
     spinner.finish_and_clear();
 
-    let tmp = std::env::temp_dir().join("engrammic-skills-unpack");
+    let tmp = std::env::temp_dir()
+        .join(format!("engrammic-skills-unpack-{}", std::process::id()));
     if tmp.exists() {
         fs::remove_dir_all(&tmp).ok();
     }

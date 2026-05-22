@@ -122,11 +122,11 @@ fn status() -> Result<()> {
         let installed = config::is_installed(&tool.config_path, ENDPOINT);
         let label = if installed {
             any_installed = true;
-            "✓ installed".green()
+            format!("{:<18}", "✓ installed").green()
         } else if tool.config_path.parent().map(|p| p.exists()).unwrap_or(false) {
-            "- not configured".dimmed()
+            format!("{:<18}", "- not configured").dimmed()
         } else {
-            "- not detected".dimmed()
+            format!("{:<18}", "- not detected").dimmed()
         };
         println!("  {} {}", label, tool.name);
     }
@@ -136,9 +136,9 @@ fn status() -> Result<()> {
     for dest in SkillDest::all() {
         let count = skills::count_skills(&dest.path);
         let label = if count > 0 {
-            format!("✓ {} skills", count).green()
+            format!("{:<18}", format!("✓ {} skills", count)).green()
         } else {
-            "- none".dimmed()
+            format!("{:<18}", "- none").dimmed()
         };
         println!("  {} {}", label, dest.name);
     }

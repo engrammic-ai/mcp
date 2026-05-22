@@ -66,4 +66,9 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("engrammic")));
         assert!(lines.iter().any(|l| l.contains("engrammic.ai")));
     }
+
+    #[test]
+    fn print_banner_does_not_panic() {
+        print_banner();
+    }
 }
