@@ -27,4 +27,6 @@ pub enum Commands {
     Uninstall,
     /// Show installation status
     Status,
+    /// Install self-hosted Docker stack
+    Docker,
 }

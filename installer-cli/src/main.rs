@@ -1,6 +1,8 @@
 mod banner;
 mod cli;
 mod config;
+mod docker;
+mod license;
 mod skills;
 mod tools;
 
@@ -9,7 +11,7 @@ use clap::Parser;
 use colored::Colorize;
 use inquire::{
     ui::{Attributes, Color, RenderConfig, StyleSheet, Styled},
-    Confirm, MultiSelect,
+    Confirm, MultiSelect, Text,
 };
 
 use cli::{Cli, Commands};
@@ -36,6 +38,7 @@ fn main() -> Result<()> {
         Commands::Update => update(cli.yes, cli.tool.as_deref()),
         Commands::Uninstall => uninstall(cli.yes, cli.tool.as_deref()),
         Commands::Status => status(),
+        Commands::Docker => install_docker(),
     }
 }
 
@@ -201,6 +204,96 @@ fn select_tools(yes: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
         .into_iter()
         .filter(|t| selection.contains(&t.name))
         .collect())
+}
+
+fn install_docker() -> Result<()> {
+    banner::print_banner();
+
+    // Check Docker is available and running.
+    println!("{}", "Checking Docker".bold());
+    if !docker::check_docker()? {
+        println!(
+            "{} Docker is not running or not installed.",
+            "✗".red()
+        );
+        println!(
+            "  Install Docker Desktop from {} then try again.",
+            "https://docs.docker.com/get-docker/".cyan()
+        );
+        return Ok(());
+    }
+    println!("  {} Docker is running", "✓".green());
+    println!();
+
+    // Prompt for license key.
+    let license_key = Text::new("License key")
+        .with_help_message("Starts with ENGR_ — get yours at engrammic.ai/self-hosted")
+        .with_render_config(render_config())
+        .prompt()?;
+
+    // Validate format client-side (full validation is server-side).
+    println!("{}", "Validating license".bold());
+    match license::validate_license_format(&license_key) {
+        Ok(info) => {
+            println!(
+                "  {} Valid — customer: {}, {} days remaining",
+                "✓".green(),
+                info.customer.cyan(),
+                info.days_remaining
+            );
+        }
+        Err(e) => {
+            println!("  {} {}", "✗".red(), e);
+            return Ok(());
+        }
+    }
+    println!();
+
+    // Prompt for install directory.
+    let install_dir = Text::new("Install directory")
+        .with_default("./engrammic")
+        .with_help_message("Compose file and .env will be written here")
+        .with_render_config(render_config())
+        .prompt()?;
+
+    let dir = std::path::Path::new(&install_dir);
+
+    // Write compose bundle.
+    println!("{}", "Writing compose bundle".bold());
+    docker::write_compose_bundle(dir, &license_key)?;
+    println!(
+        "  {} {}",
+        "✓".green(),
+        dir.join("docker-compose.yml").display().to_string().dimmed()
+    );
+    println!(
+        "  {} {}",
+        "✓".green(),
+        dir.join(".env").display().to_string().dimmed()
+    );
+    println!();
+
+    // Print next steps.
+    println!("{}", "Next steps".bold());
+    println!(
+        "  1. Review {} and set a strong POSTGRES_PASSWORD",
+        dir.join(".env").display().to_string().cyan()
+    );
+    println!(
+        "  2. Run {} to start all services",
+        format!("docker compose -f {} up -d", dir.join("docker-compose.yml").display()).cyan()
+    );
+    println!(
+        "  3. MCP endpoint will be available at {}",
+        "http://localhost:8000/mcp".cyan()
+    );
+    println!();
+    println!(
+        "Configure your harness to use {} as the MCP endpoint.",
+        "http://localhost:8000/mcp".cyan()
+    );
+
+    Ok(())
 }
 
 fn install_skills_step(yes: bool) -> Result<()> {
