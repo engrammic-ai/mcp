@@ -7,10 +7,26 @@ mod tools;
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
+use inquire::{
+    ui::{Attributes, Color, RenderConfig, StyleSheet, Styled},
+    Confirm, MultiSelect,
+};
 
 use cli::{Cli, Commands};
 use tools::{SkillDest, Tool, ENDPOINT};
+
+const VIOLET: Color = Color::Rgb { r: 0x7E, g: 0x57, b: 0xC2 };
+
+fn render_config() -> RenderConfig<'static> {
+    RenderConfig::default()
+        .with_prompt_prefix(Styled::new("▸").with_fg(VIOLET))
+        .with_highlighted_option_prefix(Styled::new("▶").with_fg(VIOLET))
+        .with_scroll_up_prefix(Styled::new("▲").with_fg(VIOLET))
+        .with_scroll_down_prefix(Styled::new("▼").with_fg(VIOLET))
+        .with_selected_checkbox(Styled::new("■").with_fg(Color::LightGreen))
+        .with_unselected_checkbox(Styled::new("□").with_fg(Color::DarkGrey))
+        .with_help_message(StyleSheet::new().with_fg(VIOLET).with_attr(Attributes::ITALIC))
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -174,30 +190,27 @@ fn select_tools(yes: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
     }
 
     let all_tools = Tool::all();
-    let items: Vec<&str> = all_tools.iter().map(|t| t.name).collect();
-    let detected_ids: Vec<&str> = detected.iter().map(|t| t.id).collect();
-    let defaults: Vec<bool> = all_tools
-        .iter()
-        .map(|t| detected_ids.contains(&t.id))
-        .collect();
+    let options: Vec<&str> = all_tools.iter().map(|t| t.name).collect();
 
-    let selection = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select harnesses to configure (space toggles, enter confirms)")
-        .items(&items)
-        .defaults(&defaults)
-        .interact()?;
+    let selection = MultiSelect::new("Select harnesses to configure", options)
+        .with_help_message("↑↓ move · space toggle · enter confirm")
+        .with_render_config(render_config())
+        .prompt()?;
 
-    Ok(selection.into_iter().map(|i| all_tools[i].clone()).collect())
+    Ok(all_tools
+        .into_iter()
+        .filter(|t| selection.contains(&t.name))
+        .collect())
 }
 
 fn install_skills_step(yes: bool) -> Result<()> {
     let proceed = if yes {
         true
     } else {
-        Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Also install 21 Engrammic skills?")
-            .default(true)
-            .interact()?
+        Confirm::new("Also install 21 Engrammic skills?")
+            .with_default(true)
+            .with_render_config(render_config())
+            .prompt()?
     };
 
     if !proceed {
@@ -209,14 +222,17 @@ fn install_skills_step(yes: bool) -> Result<()> {
     let chosen: Vec<&SkillDest> = if yes {
         all_dests.iter().filter(|d| d.default).collect()
     } else {
-        let items: Vec<&str> = all_dests.iter().map(|d| d.name).collect();
-        let defaults: Vec<bool> = all_dests.iter().map(|d| d.default).collect();
-        let picked = MultiSelect::with_theme(&ColorfulTheme::default())
-            .with_prompt("Install skills to (space toggles, enter confirms)")
-            .items(&items)
-            .defaults(&defaults)
-            .interact()?;
-        picked.into_iter().map(|i| &all_dests[i]).collect()
+        let options: Vec<&str> = all_dests.iter().map(|d| d.name).collect();
+
+        let picked = MultiSelect::new("Install skills to", options)
+            .with_help_message("↑↓ move · space toggle · enter confirm")
+            .with_render_config(render_config())
+            .prompt()?;
+
+        all_dests
+            .iter()
+            .filter(|d| picked.contains(&d.name))
+            .collect()
     };
 
     if chosen.is_empty() {
@@ -224,8 +240,7 @@ fn install_skills_step(yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    let paths: Vec<std::path::PathBuf> =
-        chosen.iter().map(|d| d.path.clone()).collect();
+    let paths: Vec<std::path::PathBuf> = chosen.iter().map(|d| d.path.clone()).collect();
     let results = skills::install_skills(&paths)?;
 
     println!("{}", "Installing skills".bold());

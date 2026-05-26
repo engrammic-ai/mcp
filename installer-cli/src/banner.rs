@@ -1,8 +1,6 @@
 use colored::Colorize;
 
-// Oxide red border, bone white text. Hex values are tunable.
-const OXIDE: (u8, u8, u8) = (0xA3, 0x3B, 0x2A);
-const BONE: (u8, u8, u8) = (0xE9, 0xE2, 0xD2);
+const VIOLET: (u8, u8, u8) = (0x7E, 0x57, 0xC2);
 const INNER_WIDTH: usize = 45;
 
 /// The text content of the banner, one entry per content line.
@@ -15,9 +13,8 @@ pub fn banner_lines() -> Vec<String> {
 }
 
 pub fn print_banner() {
-    let (o0, o1, o2) = OXIDE;
-    let (b0, b1, b2) = BONE;
-    let edge = |s: &str| s.truecolor(o0, o1, o2);
+    let (v0, v1, v2) = VIOLET;
+    let edge = |s: &str| s.truecolor(v0, v1, v2);
 
     let border = "─".repeat(INNER_WIDTH);
     let blank = " ".repeat(INNER_WIDTH);
@@ -28,27 +25,24 @@ pub fn print_banner() {
 
     for (i, line) in banner_lines().iter().enumerate() {
         let padded = format!("   {:<width$}", line, width = INNER_WIDTH - 3);
-        let colored = if i == 0 {
-            // Bold the product name; keep the rest of the line intact.
+        let content = if i == 0 {
             let name = "engrammic";
             let rest = &line[name.len()..];
             format!(
                 "   {}{}",
-                name.truecolor(b0, b1, b2).bold(),
+                name.truecolor(v0, v1, v2).bold(),
                 format!("{:<width$}", rest, width = INNER_WIDTH - 3 - name.len())
-                    .truecolor(b0, b1, b2)
             )
         } else if i == 2 {
             format!(
                 "   {}{}",
-                "→ ".truecolor(o0, o1, o2),
+                "→ ".truecolor(v0, v1, v2),
                 format!("{:<width$}", line, width = INNER_WIDTH - 5)
-                    .truecolor(b0, b1, b2)
             )
         } else {
-            padded.truecolor(b0, b1, b2).to_string()
+            padded
         };
-        println!("  {}{}{}", edge("│"), colored, edge("│"));
+        println!("  {}{}{}", edge("│"), content, edge("│"));
     }
 
     println!("  {}{}{}", edge("│"), blank, edge("│"));
