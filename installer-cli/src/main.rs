@@ -7,17 +7,18 @@ mod license;
 mod scale;
 mod skills;
 mod tools;
+mod user_config;
 
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
 use inquire::{
     ui::{Attributes, Color, RenderConfig, StyleSheet, Styled},
-    Confirm, MultiSelect, Text,
+    Confirm, MultiSelect, Select, Text,
 };
 
 use cli::{Cli, Commands};
-use tools::{SkillDest, Tool, ENDPOINT};
+use tools::{SkillDest, Tool, CLOUD_ENDPOINT, LOCAL_ENDPOINT};
 
 const VIOLET: Color = Color::Rgb { r: 0x7E, g: 0x57, b: 0xC2 };
 
@@ -49,21 +50,74 @@ fn main() -> Result<()> {
 fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
     banner::print_banner();
 
+    let existing_config = user_config::UserConfig::load().unwrap_or_default();
+
+    let endpoint = if yes {
+        existing_config.endpoint.unwrap_or_else(|| CLOUD_ENDPOINT.to_string())
+    } else if let Some(ref ep) = existing_config.endpoint {
+        println!(
+            "{} Found existing config: {}",
+            "i".cyan(),
+            user_config::UserConfig::path().display()
+        );
+        println!("  Endpoint: {}", ep.cyan());
+        println!();
+
+        let use_existing = Confirm::new("Use this endpoint?")
+            .with_default(true)
+            .with_render_config(render_config())
+            .prompt()?;
+
+        if use_existing {
+            ep.clone()
+        } else {
+            select_deployment_mode(&existing_config)?
+        }
+    } else {
+        select_deployment_mode(&existing_config)?
+    };
+
     let tools = select_tools(yes, tool_id)?;
     if tools.is_empty() {
         println!("{} No harness selected.", "!".yellow());
         return Ok(());
     }
 
-    println!("{}", "Writing MCP config".bold());
+    println!("{}", "Configuring harnesses".bold());
+    println!(
+        "  {}",
+        "Only the 'engrammic' MCP server entry is modified; other servers are preserved.".dimmed()
+    );
+    println!();
     for tool in &tools {
-        config::install(&tool.config_path, ENDPOINT)?;
-        println!(
-            "  {} {}  {}",
-            "✓".green(),
-            tool.name,
-            tool.config_path.display().to_string().dimmed()
-        );
+        let result = config::install(&tool.config_path, &endpoint)?;
+        match result {
+            config::InstallResult::Created => {
+                println!(
+                    "  {} {} {}",
+                    "✓".green(),
+                    tool.name,
+                    "(added engrammic)".dimmed()
+                );
+            }
+            config::InstallResult::Updated { old_url } => {
+                println!(
+                    "  {} {} {}",
+                    "✓".green(),
+                    tool.name,
+                    format!("(updated: {} -> {})", old_url, endpoint).dimmed()
+                );
+            }
+            config::InstallResult::Unchanged => {
+                println!(
+                    "  {} {} {}",
+                    "-".dimmed(),
+                    tool.name,
+                    "(already configured)".dimmed()
+                );
+            }
+        }
+        println!("    {}", tool.config_path.display().to_string().dimmed());
     }
     println!();
 
@@ -77,14 +131,142 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn select_deployment_mode(existing_config: &user_config::UserConfig) -> Result<String> {
+    let mode = Select::new(
+        "Deployment mode",
+        vec!["Cloud (hosted by Engrammic)", "Self-hosted (Docker on your machine)"],
+    )
+    .with_help_message("Cloud is easiest; self-hosted keeps data local")
+    .with_render_config(render_config())
+    .prompt()?;
+
+    if mode.starts_with("Self-hosted") {
+        run_docker_setup(existing_config)
+    } else {
+        Ok(CLOUD_ENDPOINT.to_string())
+    }
+}
+
+fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String> {
+    println!();
+    println!("{}", "Checking Docker".bold());
+    if !docker::check_docker()? {
+        println!(
+            "{} Docker is not running or not installed.",
+            "✗".red()
+        );
+        println!(
+            "  Install Docker Desktop from {} then try again.",
+            "https://docs.docker.com/get-docker/".cyan()
+        );
+        anyhow::bail!("Docker not available");
+    }
+    println!("  {} Docker is running", "✓".green());
+    println!();
+
+    let mut license_prompt = Text::new("License key")
+        .with_help_message("Starts with ENGR_ - get yours at engrammic.ai/self-hosted")
+        .with_render_config(render_config());
+
+    if let Some(ref key) = existing_config.license_key {
+        license_prompt = license_prompt.with_default(key);
+    }
+
+    let license_key = license_prompt.prompt()?;
+
+    println!("{}", "Validating license".bold());
+    match license::validate_license_format(&license_key) {
+        Ok(info) => {
+            println!(
+                "  {} Valid - customer: {}, {} days remaining",
+                "✓".green(),
+                info.customer.cyan(),
+                info.days_remaining
+            );
+        }
+        Err(e) => {
+            println!("  {} {}", "✗".red(), e);
+            anyhow::bail!("Invalid license");
+        }
+    }
+    println!();
+
+    let default_dir = user_config::UserConfig::dir();
+    let default_dir_str = default_dir.display().to_string();
+
+    let install_dir = Text::new("Install directory")
+        .with_default(&default_dir_str)
+        .with_help_message("Compose file and .env will be written here")
+        .with_render_config(render_config())
+        .prompt()?;
+
+    let dir = std::path::Path::new(&install_dir);
+
+    println!("{}", "Writing compose bundle".bold());
+    docker::write_compose_bundle(dir, &license_key)?;
+    println!(
+        "  {} {}",
+        "✓".green(),
+        dir.join("docker-compose.yml").display().to_string().dimmed()
+    );
+    println!(
+        "  {} {}",
+        "✓".green(),
+        dir.join(".env").display().to_string().dimmed()
+    );
+    println!();
+
+    let endpoint = Text::new("MCP endpoint URL")
+        .with_default(LOCAL_ENDPOINT)
+        .with_help_message("Change if running on a different host/port")
+        .with_render_config(render_config())
+        .prompt()?;
+
+    println!();
+    println!("{}", "Next steps after install completes".bold());
+    println!(
+        "  1. Review {} and set a strong POSTGRES_PASSWORD",
+        dir.join(".env").display().to_string().cyan()
+    );
+    println!(
+        "  2. Run {} to start services",
+        format!("docker compose -f {} up -d", dir.join("docker-compose.yml").display()).cyan()
+    );
+    println!();
+    println!(
+        "  Harnesses will be configured to use: {}",
+        endpoint.cyan()
+    );
+    println!(
+        "  To change later: edit {} or {}",
+        user_config::UserConfig::path().display().to_string().cyan(),
+        "engrammic.url in your harness config".cyan()
+    );
+    println!();
+
+    let new_config = user_config::UserConfig {
+        endpoint: Some(endpoint.clone()),
+        license_key: Some(license_key),
+    };
+    new_config.save()?;
+    println!(
+        "{} Saved config to {}",
+        "✓".green(),
+        user_config::UserConfig::path().display()
+    );
+
+    Ok(endpoint)
+}
+
 fn update(yes: bool, tool_id: Option<&str>) -> Result<()> {
     banner::print_banner();
 
     let tools = select_tools(yes, tool_id)?;
     for tool in &tools {
-        if config::is_installed(&tool.config_path, ENDPOINT) {
-            config::install(&tool.config_path, ENDPOINT)?;
-            println!("{} Updated engrammic in {}", "✓".green(), tool.name);
+        let endpoint = detect_installed_endpoint(&tool.config_path);
+        if let Some(ep) = endpoint {
+            let _ = config::install(&tool.config_path, &ep)?;
+            println!("{} Refreshed engrammic in {}", "✓".green(), tool.name);
         } else {
             println!("{} Not installed for {}", "!".yellow(), tool.name);
         }
@@ -136,22 +318,50 @@ fn uninstall(yes: bool, tool_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn detect_installed_endpoint(config_path: &std::path::Path) -> Option<String> {
+    if config::is_installed(config_path, CLOUD_ENDPOINT) {
+        Some(CLOUD_ENDPOINT.to_string())
+    } else if config::is_installed(config_path, LOCAL_ENDPOINT) {
+        Some(LOCAL_ENDPOINT.to_string())
+    } else {
+        None
+    }
+}
+
 fn status() -> Result<()> {
     banner::print_banner();
 
     println!("{}", "Harnesses".bold());
     let mut any_installed = false;
+    let mut has_cloud = false;
+    let mut has_local = false;
     for tool in Tool::all() {
-        let installed = config::is_installed(&tool.config_path, ENDPOINT);
-        let label = if installed {
+        let endpoint = detect_installed_endpoint(&tool.config_path);
+        let label = if let Some(ep) = endpoint {
             any_installed = true;
-            format!("{:<18}", "✓ installed").green()
+            if ep == CLOUD_ENDPOINT {
+                has_cloud = true;
+                format!("{:<18}", "✓ cloud").green()
+            } else {
+                has_local = true;
+                format!("{:<18}", "✓ self-hosted").green()
+            }
         } else if tool.config_path.parent().map(|p| p.exists()).unwrap_or(false) {
             format!("{:<18}", "- not configured").dimmed()
         } else {
             format!("{:<18}", "- not detected").dimmed()
         };
         println!("  {} {}", label, tool.name);
+    }
+
+    if has_cloud {
+        println!();
+        println!("  Cloud endpoint: {}", CLOUD_ENDPOINT.cyan());
+    }
+    if has_local {
+        println!();
+        println!("  Self-hosted endpoint: {}", LOCAL_ENDPOINT.cyan());
+        println!("  To change: edit the {} key in your harness config", "engrammic.url".cyan());
     }
 
     println!();
@@ -213,6 +423,8 @@ fn select_tools(yes: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
 fn install_docker() -> Result<()> {
     banner::print_banner();
 
+    let existing_config = user_config::UserConfig::load().unwrap_or_default();
+
     // Check Docker is available and running.
     println!("{}", "Checking Docker".bold());
     if !docker::check_docker()? {
@@ -230,17 +442,22 @@ fn install_docker() -> Result<()> {
     println!();
 
     // Prompt for license key.
-    let license_key = Text::new("License key")
-        .with_help_message("Starts with ENGR_ — get yours at engrammic.ai/self-hosted")
-        .with_render_config(render_config())
-        .prompt()?;
+    let mut license_prompt = Text::new("License key")
+        .with_help_message("Starts with ENGR_ - get yours at engrammic.ai/self-hosted")
+        .with_render_config(render_config());
+
+    if let Some(ref key) = existing_config.license_key {
+        license_prompt = license_prompt.with_default(key);
+    }
+
+    let license_key = license_prompt.prompt()?;
 
     // Validate format client-side (full validation is server-side).
     println!("{}", "Validating license".bold());
     match license::validate_license_format(&license_key) {
         Ok(info) => {
             println!(
-                "  {} Valid — customer: {}, {} days remaining",
+                "  {} Valid - customer: {}, {} days remaining",
                 "✓".green(),
                 info.customer.cyan(),
                 info.days_remaining
@@ -254,8 +471,11 @@ fn install_docker() -> Result<()> {
     println!();
 
     // Prompt for install directory.
+    let default_dir = user_config::UserConfig::dir();
+    let default_dir_str = default_dir.display().to_string();
+
     let install_dir = Text::new("Install directory")
-        .with_default("./engrammic")
+        .with_default(&default_dir_str)
         .with_help_message("Compose file and .env will be written here")
         .with_render_config(render_config())
         .prompt()?;
@@ -277,6 +497,19 @@ fn install_docker() -> Result<()> {
     );
     println!();
 
+    // Save config.
+    let new_config = user_config::UserConfig {
+        endpoint: Some(LOCAL_ENDPOINT.to_string()),
+        license_key: Some(license_key),
+    };
+    new_config.save()?;
+    println!(
+        "{} Saved config to {}",
+        "✓".green(),
+        user_config::UserConfig::path().display()
+    );
+    println!();
+
     // Print next steps.
     println!("{}", "Next steps".bold());
     println!(
@@ -289,12 +522,12 @@ fn install_docker() -> Result<()> {
     );
     println!(
         "  3. MCP endpoint will be available at {}",
-        "http://localhost:8000/mcp".cyan()
+        LOCAL_ENDPOINT.cyan()
     );
     println!();
     println!(
-        "Configure your harness to use {} as the MCP endpoint.",
-        "http://localhost:8000/mcp".cyan()
+        "Run {} to configure your harness.",
+        "engrammic-install".cyan()
     );
 
     Ok(())

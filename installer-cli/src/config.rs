@@ -30,24 +30,47 @@ fn write_json(config_path: &Path, value: &Value) -> Result<()> {
         .with_context(|| format!("failed to write {}", config_path.display()))
 }
 
-pub fn install(config_path: &Path, endpoint: &str) -> Result<()> {
+pub enum InstallResult {
+    Created,
+    Updated { old_url: String },
+    Unchanged,
+}
+
+pub fn install(config_path: &Path, endpoint: &str) -> Result<InstallResult> {
     let mut root = read_json(config_path)?;
 
-    root.as_object_mut()
+    let servers = root
+        .as_object_mut()
         .context("config root is not a JSON object")?
         .entry("mcpServers")
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .context("mcpServers is not a JSON object")?
-        .insert(
+        .context("mcpServers is not a JSON object")?;
+
+    let old_url = servers
+        .get(MCP_SERVER_KEY)
+        .and_then(|v| v.get("url"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let result = match old_url {
+        Some(ref url) if url == endpoint => InstallResult::Unchanged,
+        Some(url) => InstallResult::Updated { old_url: url },
+        None => InstallResult::Created,
+    };
+
+    if !matches!(result, InstallResult::Unchanged) {
+        servers.insert(
             MCP_SERVER_KEY.to_string(),
             json!({
                 "type": "http",
                 "url": endpoint
             }),
         );
+        write_json(config_path, &root)?;
+    }
 
-    write_json(config_path, &root)
+    Ok(result)
 }
 
 pub fn uninstall(config_path: &Path) -> Result<()> {

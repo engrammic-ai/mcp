@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-pub const ENDPOINT: &str = "https://beta.engrammic.ai/mcp/";
+pub const CLOUD_ENDPOINT: &str = "https://beta.engrammic.ai/mcp/";
+pub const LOCAL_ENDPOINT: &str = "http://localhost:8000/mcp";
 
 #[derive(Clone)]
 pub struct Tool {
