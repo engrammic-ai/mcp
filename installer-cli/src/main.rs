@@ -1,8 +1,10 @@
 mod banner;
 mod cli;
 mod config;
+mod doctor;
 mod docker;
 mod license;
+mod scale;
 mod skills;
 mod tools;
 
@@ -39,6 +41,8 @@ fn main() -> Result<()> {
         Commands::Uninstall => uninstall(cli.yes, cli.tool.as_deref()),
         Commands::Status => status(),
         Commands::Docker => install_docker(),
+        Commands::Scale => scale::show_status(),
+        Commands::Doctor => doctor::run_diagnostics(),
     }
 }
 
