@@ -18,7 +18,9 @@ Windows (PowerShell):
 irm https://get.engrammic.ai/install.ps1 | iex
 ```
 
-The installer detects your agent harnesses (Claude Code, Cursor, Codex, Gemini CLI, and more), wires Engrammic in as an MCP server, and optionally installs the Engrammic skills. The first time your agent connects, Engrammic opens an OAuth sign-in flow in your browser.
+The installer detects your agent harnesses (Claude Code, Cursor, Codex, Gemini CLI, and more), wires Engrammic in as an MCP server, and optionally installs the Engrammic skills. Run `engrammic-mcp login` to authenticate after installation.
+
+See [Getting Started](docs/GETTING-STARTED.md) after installation.
 
 To configure a harness by hand, add the MCP server directly:
 
@@ -65,6 +67,18 @@ Trace why you believe something:
 | `dismiss` | Dismiss contradiction markers |
 | `patterns` | Discover workflow templates |
 | `tick` | Lightweight engagement check |
+
+## Hosted vs Local
+
+The default setup connects to `beta.engrammic.ai`. This is the right choice for most users.
+
+Use the local engine ([engrammic-engine](https://github.com/engrammic-ai/engine)) if you:
+
+- Need fully offline or air-gapped operation
+- Cannot send data to external services
+- Are running a self-hosted production deployment
+
+The local engine is a drop-in replacement. Point your harness config at `http://localhost:PORT/mcp/` instead of the hosted URL.
 
 ## Self-Hosting
 
