@@ -134,13 +134,16 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
 fn select_deployment_mode(existing_config: &user_config::UserConfig) -> Result<String> {
     let mode = Select::new(
         "Deployment mode",
-        vec!["Cloud (hosted by Engrammic)", "Self-hosted (Docker on your machine)"],
+        vec![
+            "Cloud - connect to mcp.engrammic.ai (free tier available)",
+            "Self-hosted - run locally with Docker (license required)",
+        ],
     )
-    .with_help_message("Cloud is easiest; self-hosted keeps data local")
+    .with_help_message("Self-hosted requires Docker and a license key")
     .with_render_config(render_config())
     .prompt()?;
 
-    if mode.starts_with("Self-hosted") {
+    if mode.starts_with("Self-hosted -") {
         run_docker_setup(existing_config)
     } else {
         Ok(CLOUD_ENDPOINT.to_string())
