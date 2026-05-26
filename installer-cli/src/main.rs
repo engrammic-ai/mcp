@@ -80,6 +80,19 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
     let tools = select_tools(yes, tool_id)?;
     if tools.is_empty() {
         println!("{} No harness selected.", "!".yellow());
+        println!();
+        println!("Add this to your MCP config manually:");
+        println!();
+        println!(
+            r#"  {}"engrammic": {{
+    "type": "sse",
+    "url": "{}"
+  }}{}"#,
+            "{".dimmed(),
+            endpoint.cyan(),
+            "}".dimmed()
+        );
+        println!();
         return Ok(());
     }
 
