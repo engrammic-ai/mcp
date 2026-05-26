@@ -26,7 +26,7 @@ To configure a harness by hand, add the MCP server directly:
 {
   "mcpServers": {
     "engrammic": {
-      "type": "sse",
+      "type": "http",
       "url": "https://beta.engrammic.ai/mcp/"
     }
   }

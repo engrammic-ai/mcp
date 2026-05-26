@@ -42,7 +42,7 @@ pub fn install(config_path: &Path, endpoint: &str) -> Result<()> {
         .insert(
             MCP_SERVER_KEY.to_string(),
             json!({
-                "type": "sse",
+                "type": "http",
                 "url": endpoint
             }),
         );
