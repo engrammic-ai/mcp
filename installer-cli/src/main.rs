@@ -84,13 +84,8 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
         println!("Add this to your MCP config manually:");
         println!();
         println!(
-            r#"  {}"engrammic": {{
-    "type": "sse",
-    "url": "{}"
-  }}{}"#,
-            "{".dimmed(),
-            endpoint.cyan(),
-            "}".dimmed()
+            r#"  "engrammic": {{ "type": "http", "url": "{}" }}"#,
+            endpoint
         );
         println!();
         return Ok(());
