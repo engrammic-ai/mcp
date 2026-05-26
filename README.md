@@ -54,8 +54,17 @@ Trace why you believe something:
 | `recall` | Search and retrieve context |
 | `link` | Connect related concepts |
 | `trace` | Query provenance chains |
+| `reason` | Record explicit reasoning steps |
+| `reflect` | Store meta-observations |
 | `hypothesize` | Form tentative beliefs |
+| `revise` | Update tentative hypotheses |
 | `commit` | Crystallize hypotheses to commitments |
+| `accept` | Ratify system-synthesized beliefs |
+| `reject` | Reject system-synthesized beliefs |
+| `forget` | Request node deletion |
+| `dismiss` | Dismiss contradiction markers |
+| `patterns` | Discover workflow templates |
+| `tick` | Lightweight engagement check |
 
 ## Self-Hosting
 
