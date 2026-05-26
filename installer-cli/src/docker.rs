@@ -19,6 +19,7 @@ pub fn check_docker() -> Result<bool> {
 
 /// Docker compose template (embedded at compile time).
 pub const COMPOSE_TEMPLATE: &str = include_str!("../assets/docker-compose.yml");
+pub const README_TEMPLATE: &str = include_str!("../assets/README.md");
 
 /// Write compose file and .env to target directory.
 pub fn write_compose_bundle(dir: &Path, license_key: &str) -> Result<()> {
@@ -26,6 +27,9 @@ pub fn write_compose_bundle(dir: &Path, license_key: &str) -> Result<()> {
 
     let compose_path = dir.join("docker-compose.yml");
     fs::write(&compose_path, COMPOSE_TEMPLATE)?;
+
+    let readme_path = dir.join("README.md");
+    fs::write(&readme_path, README_TEMPLATE)?;
 
     let env_content = format!(
         r#"# Engrammic Self-Hosted Configuration
