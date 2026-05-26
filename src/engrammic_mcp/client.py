@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
 import structlog
+from filelock import FileLock, Timeout
 
 from engrammic_mcp.config import Settings
-from engrammic_mcp.credentials import load_credentials, store_credentials
+from engrammic_mcp.credentials import clear_credentials, load_credentials, store_credentials
 from engrammic_mcp.errors import (
     EngrammicError,
     sanitize_error_message,
@@ -19,6 +22,9 @@ from engrammic_mcp.errors import (
 logger = structlog.get_logger(__name__)
 
 _http_client: httpx.AsyncClient | None = None
+_refresh_lock = asyncio.Lock()
+
+REFRESH_BUFFER_SECONDS = 60
 
 
 def get_http_client() -> httpx.AsyncClient:
@@ -46,17 +52,36 @@ class EngrammicClient:
         self.settings = settings
         self._token: str | None = settings.api_key
         self._refresh_token: str | None = None
+        self._needs_refresh = False
 
         if not self._token:
             self._load_oauth_credentials()
 
     def _load_oauth_credentials(self) -> None:
-        """Load OAuth tokens from credential storage."""
+        """Load OAuth tokens from credential storage.
+
+        If tokens are expired or expiring soon (within REFRESH_BUFFER_SECONDS),
+        marks for proactive refresh on first request.
+        """
         creds = load_credentials(self.settings.credentials_path)
-        if creds:
-            self._token = creds.get("access_token")
-            self._refresh_token = creds.get("refresh_token")
-            logger.debug("Loaded OAuth credentials from storage")
+        if not creds:
+            return
+
+        self._token = creds.get("access_token")
+        self._refresh_token = creds.get("refresh_token")
+
+        expires_at_str = creds.get("expires_at")
+        if expires_at_str and self._token:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_str)
+                buffer = timedelta(seconds=REFRESH_BUFFER_SECONDS)
+                if expires_at <= datetime.now(UTC) + buffer:
+                    logger.debug("Access token expired or expiring soon, will refresh")
+                    self._needs_refresh = True
+            except ValueError:
+                logger.warning("Invalid expires_at format in credentials")
+
+        logger.debug("Loaded OAuth credentials from storage")
 
     async def post(self, path: str, data: dict[str, Any]) -> dict[str, Any]:
         """POST request to backend."""
@@ -72,7 +97,12 @@ class EngrammicClient:
         path: str,
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Execute HTTP request with auth, retry on 401, and error handling."""
+        """Execute HTTP request with auth, proactive refresh, and 401 retry."""
+        if self._needs_refresh and self._refresh_token:
+            logger.debug("Proactive token refresh before request")
+            await self._refresh_access_token()
+            self._needs_refresh = False
+
         client = get_http_client()
         request_id = str(uuid.uuid4())
 
@@ -105,27 +135,82 @@ class EngrammicClient:
         return self._handle_response(resp, request_id)
 
     async def _refresh_access_token(self) -> bool:
-        """Attempt to refresh the access token. Returns True on success."""
+        """Attempt to refresh the access token.
+
+        Uses both in-process and cross-process locks to prevent concurrent
+        refresh from multiple IDE windows/processes.
+
+        Returns True on success, False if refresh failed.
+        """
+        lock_path = self.settings.credentials_path.with_suffix(".lock")
+
+        async with _refresh_lock:
+            try:
+                file_lock = FileLock(lock_path, timeout=10)
+                with file_lock:
+                    creds = load_credentials(self.settings.credentials_path)
+                    if creds and creds.get("access_token") != self._token:
+                        self._token = creds.get("access_token")
+                        self._refresh_token = creds.get("refresh_token")
+                        logger.debug("Another process refreshed tokens, reloaded")
+                        return True
+
+                    return await self._do_refresh()
+
+            except Timeout:
+                logger.warning("Could not acquire refresh lock, another process may be refreshing")
+                return False
+
+    async def _do_refresh(self) -> bool:
+        """Actually perform the token refresh HTTP call."""
+        if not self._refresh_token:
+            return False
+
         try:
             client = get_http_client()
             resp = await client.post(
-                f"{self.base_url}/v1/oauth/token",
-                json={"refresh_token": self._refresh_token},
+                f"{self.base_url}/oauth/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._refresh_token,
+                },
             )
+
             if resp.status_code == 200:
-                data = resp.json()
-                self._token = data["access_token"]
-                self._refresh_token = data.get("refresh_token", self._refresh_token)
+                tokens = resp.json()
+                self._token = tokens["access_token"]
+                new_refresh = tokens.get("refresh_token", self._refresh_token)
+                self._refresh_token = new_refresh
+
                 store_credentials(
-                    self._token,
-                    self._refresh_token or "",
-                    self.settings.credentials_path,
+                    access_token=self._token,
+                    refresh_token=new_refresh or "",
+                    expires_in=tokens.get("expires_in", 3600),
+                    path=self.settings.credentials_path,
                 )
                 logger.info("Successfully refreshed access token")
                 return True
+
+            if resp.status_code in (400, 401):
+                logger.warning("Refresh token invalid, re-authentication required")
+                self._clear_credentials()
+                return False
+
+            logger.warning("Refresh failed with server error", status=resp.status_code)
+            return False
+
+        except httpx.NetworkError as e:
+            logger.warning("Network error during token refresh", error=str(e))
+            return False
         except Exception as e:
             logger.warning("Failed to refresh token", error=str(e))
-        return False
+            return False
+
+    def _clear_credentials(self) -> None:
+        """Clear stored credentials after auth failure."""
+        self._token = None
+        self._refresh_token = None
+        clear_credentials(self.settings.credentials_path)
 
     def _handle_response(self, resp: httpx.Response, request_id: str) -> dict[str, Any]:
         """Handle response, sanitizing errors before returning."""

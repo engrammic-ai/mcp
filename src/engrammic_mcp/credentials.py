@@ -1,7 +1,7 @@
 """Secure credential storage for Engrammic OAuth tokens."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,18 +13,27 @@ logger = structlog.get_logger(__name__)
 def store_credentials(
     access_token: str,
     refresh_token: str,
+    expires_in: int,
     path: Path,
 ) -> None:
     """Store OAuth credentials securely.
 
     Creates parent directories if needed. Sets file permissions to 600
     (owner read/write only) to protect tokens.
+
+    Args:
+        access_token: The OAuth access token.
+        refresh_token: The OAuth refresh token.
+        expires_in: Token lifetime in seconds.
+        path: Path to store credentials file.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
     data = {
         "access_token": access_token,
         "refresh_token": refresh_token,
+        "expires_at": expires_at.isoformat(),
         "stored_at": datetime.now(UTC).isoformat(),
     }
 
@@ -59,3 +68,14 @@ def load_credentials(path: Path) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Failed to load credentials", path=str(path), error=str(e))
         return None
+
+
+def clear_credentials(path: Path) -> None:
+    """Remove stored credentials."""
+    if path.exists():
+        path.unlink()
+        logger.info("Credentials cleared", path=str(path))
+
+    lock_path = path.with_suffix(".lock")
+    if lock_path.exists():
+        lock_path.unlink()

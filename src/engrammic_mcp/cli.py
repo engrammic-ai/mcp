@@ -185,8 +185,8 @@ async def _oauth_login(settings: Any) -> dict[str, Any] | None:
 
     client = get_http_client()
     resp = await client.post(
-        f"{settings.backend_url}/v1/oauth/token",
-        json={
+        f"{settings.backend_url}/oauth/token",
+        data={
             "code": auth_code,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
@@ -198,9 +198,10 @@ async def _oauth_login(settings: Any) -> dict[str, Any] | None:
 
     data = resp.json()
     store_credentials(
-        data["access_token"],
-        data.get("refresh_token", ""),
-        settings.credentials_path,
+        access_token=data["access_token"],
+        refresh_token=data.get("refresh_token", ""),
+        expires_in=data.get("expires_in", 3600),
+        path=settings.credentials_path,
     )
 
     return {

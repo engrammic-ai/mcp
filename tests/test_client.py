@@ -79,7 +79,7 @@ class TestEngrammicClient:
     ) -> None:
         from engrammic_mcp.credentials import store_credentials
 
-        store_credentials("old_token", "refresh_123", settings.credentials_path)
+        store_credentials("old_token", "refresh_123", 3600, settings.credentials_path)
 
         settings_no_key = Settings(
             backend_url="https://api.test.com",
@@ -92,8 +92,8 @@ class TestEngrammicClient:
             status_code=401,
         )
         httpx_mock.add_response(
-            url="https://api.test.com/v1/oauth/token",
-            json={"access_token": "new_token", "refresh_token": "refresh_456"},
+            url="https://api.test.com/oauth/token",
+            json={"access_token": "new_token", "refresh_token": "refresh_456", "expires_in": 3600},
         )
         httpx_mock.add_response(
             url="https://api.test.com/v1/test",
@@ -105,3 +105,72 @@ class TestEngrammicClient:
 
         assert result == {"success": True}
         assert len(httpx_mock.get_requests()) == 3
+
+    async def test_proactive_refresh_on_expired_token(
+        self, settings: Settings, httpx_mock: HTTPXMock, temp_credentials_dir
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+        import json
+
+        creds_path = settings.credentials_path
+        creds_path.parent.mkdir(parents=True, exist_ok=True)
+        expired_time = datetime.now(UTC) - timedelta(seconds=60)
+        creds_path.write_text(json.dumps({
+            "access_token": "expired_token",
+            "refresh_token": "refresh_123",
+            "expires_at": expired_time.isoformat(),
+        }))
+        creds_path.chmod(0o600)
+
+        settings_no_key = Settings(
+            backend_url="https://api.test.com",
+            api_key=None,
+            credentials_path=creds_path,
+        )
+
+        httpx_mock.add_response(
+            url="https://api.test.com/oauth/token",
+            json={"access_token": "new_token", "refresh_token": "refresh_456", "expires_in": 3600},
+        )
+        httpx_mock.add_response(
+            url="https://api.test.com/v1/test",
+            json={"success": True},
+        )
+
+        client = EngrammicClient(settings_no_key)
+        result = await client.post("/v1/test", {})
+
+        assert result == {"success": True}
+        requests = httpx_mock.get_requests()
+        assert requests[0].url.path == "/oauth/token"
+        assert requests[1].url.path == "/v1/test"
+
+    async def test_clears_credentials_on_invalid_refresh_token(
+        self, settings: Settings, httpx_mock: HTTPXMock, temp_credentials_dir
+    ) -> None:
+        from engrammic_mcp.credentials import store_credentials, load_credentials
+
+        store_credentials("old_token", "bad_refresh", 3600, settings.credentials_path)
+
+        settings_no_key = Settings(
+            backend_url="https://api.test.com",
+            api_key=None,
+            credentials_path=settings.credentials_path,
+        )
+
+        httpx_mock.add_response(
+            url="https://api.test.com/v1/test",
+            status_code=401,
+        )
+        httpx_mock.add_response(
+            url="https://api.test.com/oauth/token",
+            status_code=400,
+            json={"error": "invalid_grant"},
+        )
+
+        client = EngrammicClient(settings_no_key)
+
+        with pytest.raises(EngrammicError):
+            await client.post("/v1/test", {})
+
+        assert load_credentials(settings.credentials_path) is None
