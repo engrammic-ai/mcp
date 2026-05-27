@@ -1,6 +1,6 @@
 //! Docker detection and compose installation.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -15,6 +15,47 @@ pub fn check_docker() -> Result<bool> {
         Ok(o) => Ok(o.status.success()),
         Err(_) => Ok(false),
     }
+}
+
+/// Upgrade the self-hosted Docker stack to latest version.
+pub fn upgrade_docker_stack(dir: &Path) -> Result<()> {
+    let compose_path = dir.join("docker-compose.yml");
+
+    if !compose_path.exists() {
+        anyhow::bail!(
+            "No docker-compose.yml found in {}. Run 'engrammic docker' first to install.",
+            dir.display()
+        );
+    }
+
+    println!("Pulling latest images...");
+    let pull_status = Command::new("docker")
+        .args(["compose", "-f", compose_path.to_str().unwrap(), "pull"])
+        .current_dir(dir)
+        .status()
+        .context("Failed to run docker compose pull")?;
+
+    if !pull_status.success() {
+        anyhow::bail!("docker compose pull failed");
+    }
+
+    println!("Restarting services with new images...");
+    let up_status = Command::new("docker")
+        .args(["compose", "-f", compose_path.to_str().unwrap(), "up", "-d"])
+        .current_dir(dir)
+        .status()
+        .context("Failed to run docker compose up")?;
+
+    if !up_status.success() {
+        anyhow::bail!("docker compose up failed");
+    }
+
+    println!("\nUpgrade complete! Cleaning up old images...");
+    let _ = Command::new("docker")
+        .args(["image", "prune", "-f"])
+        .status();
+
+    Ok(())
 }
 
 /// Docker compose template (embedded at compile time).

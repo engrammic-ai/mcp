@@ -42,6 +42,7 @@ fn main() -> Result<()> {
         Commands::Uninstall => uninstall(cli.yes, cli.tool.as_deref()),
         Commands::Status => status(),
         Commands::Docker => install_docker(),
+        Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
     }
@@ -593,5 +594,31 @@ fn install_skills_step(yes: bool) -> Result<()> {
             path.display().to_string().dimmed()
         );
     }
+    Ok(())
+}
+
+fn upgrade_docker() -> Result<()> {
+    banner::print_banner();
+
+    let config = user_config::UserConfig::load().unwrap_or_default();
+    let dir = user_config::UserConfig::dir();
+
+    if config.endpoint.as_deref() != Some(LOCAL_ENDPOINT) {
+        println!(
+            "{} No self-hosted installation found.",
+            "!".yellow()
+        );
+        println!("  Run {} first to install the Docker stack.", "engrammic docker".cyan());
+        return Ok(());
+    }
+
+    docker::upgrade_docker_stack(&dir)?;
+
+    println!();
+    println!(
+        "{} Self-hosted stack upgraded to latest version.",
+        "✓".green()
+    );
+
     Ok(())
 }

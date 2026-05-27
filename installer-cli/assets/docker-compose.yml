@@ -1,10 +1,11 @@
 # Engrammic Self-Hosted - Lite defaults (~3GB RAM total)
 # Installed by: engrammic docker
 # For scaling guidance, run: engrammic scale
+# To upgrade, run: engrammic upgrade
 
 services:
   app:
-    image: europe-north1-docker.pkg.dev/engrammic/releases/engrammic-api:v0.1.0
+    image: europe-north1-docker.pkg.dev/engrammic/releases/engrammic-api:latest
     container_name: engrammic-app
     ports:
       - "8000:8000"

@@ -29,6 +29,8 @@ pub enum Commands {
     Status,
     /// Install self-hosted Docker stack
     Docker,
+    /// Upgrade self-hosted Docker stack to latest version
+    Upgrade,
     /// Show container resource usage and scaling recommendations
     Scale,
     /// Run diagnostic checks
