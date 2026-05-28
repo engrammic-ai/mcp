@@ -57,8 +57,8 @@ pub fn extract_body(content: &str) -> &str {
     // Find closing ---
     if let Some(end) = rest.find("\n---") {
         let after_close = &rest[end + 4..]; // skip \n---
-        // Skip trailing newline after closing ---
-        after_close.strip_prefix('\n').unwrap_or(after_close)
+        // Skip trailing newlines after closing --- (handles blank line after frontmatter)
+        after_close.trim_start_matches('\n')
     } else {
         // Malformed: opening --- but no closing ---; treat full content as body.
         content

@@ -106,6 +106,7 @@ fn verify_signature(header_b64: &str, payload_b64: &str, signature_b64: &str) ->
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct LicenseBasicInfo {
     pub customer: String,
     pub expires_at: i64,
