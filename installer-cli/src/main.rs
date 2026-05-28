@@ -227,6 +227,14 @@ fn run_full_install(endpoint: String, yes: bool, tool_id: Option<&str>) -> Resul
 
     install_skills_step(yes)?;
 
+    // Save config so returning users get the menu
+    let existing = user_config::UserConfig::load().unwrap_or_default();
+    let config = user_config::UserConfig {
+        endpoint: Some(endpoint),
+        license_key: existing.license_key,
+    };
+    config.save()?;
+
     println!();
     println!(
         "Done. Tools available: {}",
