@@ -25,6 +25,7 @@ async def remember(
     content: str,
     tags: list[str] | None = None,
     decay: str = "standard",
+    supersedes: str | None = None,
 ) -> dict[str, Any]:
     """Store an observation to memory layer.
 
@@ -32,6 +33,7 @@ async def remember(
         content: What to remember.
         tags: Optional categorization tags.
         decay: How long to keep: ephemeral|standard|durable|permanent.
+        supersedes: Node ID this observation replaces (for version chaining).
 
     Returns:
         {node_id, created_at}
@@ -45,5 +47,7 @@ async def remember(
         payload["tags"] = tags
     if decay != "standard":
         payload["decay_class"] = decay
+    if supersedes:
+        payload["supersedes"] = supersedes
 
     return await client.post("/v1/context/store", payload)

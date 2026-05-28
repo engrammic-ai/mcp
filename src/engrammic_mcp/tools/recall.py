@@ -27,7 +27,9 @@ async def recall(
     depth: int = 0,
     layers: list[str] | None = None,
     top_k: int = 10,
-    as_of: str | None = None,
+    include_hypotheses: bool = False,
+    bypass_cache: bool = False,
+    max_age_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Retrieve knowledge by search or node ID.
 
@@ -37,7 +39,9 @@ async def recall(
         depth: Graph traversal depth.
         layers: Filter by layers: memory|knowledge|wisdom|intelligence.
         top_k: Max results (default 10).
-        as_of: Time-travel query (ISO timestamp).
+        include_hypotheses: Include tentative WorkingHypothesis nodes (default False).
+        bypass_cache: Skip cache and query stores directly (default False).
+        max_age_seconds: Only return nodes updated within this many seconds.
 
     Returns:
         {nodes: [...]}
@@ -55,7 +59,11 @@ async def recall(
         payload["layers"] = layers
     if top_k != 10:
         payload["top_k"] = top_k
-    if as_of:
-        payload["as_of"] = as_of
+    if include_hypotheses:
+        payload["include_hypotheses"] = include_hypotheses
+    if bypass_cache:
+        payload["bypass_cache"] = bypass_cache
+    if max_age_seconds is not None:
+        payload["max_age_seconds"] = max_age_seconds
 
     return await client.post("/v1/context/recall", payload)

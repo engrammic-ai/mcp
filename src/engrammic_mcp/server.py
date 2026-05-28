@@ -52,12 +52,14 @@ def create_server() -> FastMCP:
         content: str,
         tags: list[str] | None = None,
         decay: str = "standard",
+        supersedes: str | None = None,
     ) -> dict[str, Any]:
         """Store an observation to memory layer."""
         return await remember.remember(
             content=content,
             tags=tags,
             decay=decay,
+            supersedes=supersedes,
         )
 
     @mcp.tool()
@@ -68,6 +70,7 @@ def create_server() -> FastMCP:
         confidence: float = 0.8,
         tags: list[str] | None = None,
         source_tier: str | None = None,
+        supersedes: str | None = None,
     ) -> dict[str, Any]:
         """Record something you learned with evidence."""
         return await learn.learn(
@@ -77,14 +80,16 @@ def create_server() -> FastMCP:
             confidence=confidence,
             tags=tags,
             source_tier=source_tier,
+            supersedes=supersedes,
         )
 
     @mcp.tool()
     async def believe_tool(
         belief: str,
-        about: list[str],
+        about: list[str] | str,
         confidence: float = 0.8,
         reasoning: str | None = None,
+        supersedes: str | None = None,
     ) -> dict[str, Any]:
         """Declare a belief as a commitment."""
         return await believe.believe(
@@ -92,6 +97,7 @@ def create_server() -> FastMCP:
             about=about,
             confidence=confidence,
             reasoning=reasoning,
+            supersedes=supersedes,
         )
 
     @mcp.tool()
@@ -101,7 +107,9 @@ def create_server() -> FastMCP:
         depth: int = 0,
         layers: list[str] | None = None,
         top_k: int = 10,
-        as_of: str | None = None,
+        include_hypotheses: bool = False,
+        bypass_cache: bool = False,
+        max_age_seconds: int | None = None,
     ) -> dict[str, Any]:
         """Retrieve knowledge by search or node ID."""
         return await recall.recall(
@@ -110,7 +118,9 @@ def create_server() -> FastMCP:
             depth=depth,
             layers=layers,
             top_k=top_k,
-            as_of=as_of,
+            include_hypotheses=include_hypotheses,
+            bypass_cache=bypass_cache,
+            max_age_seconds=max_age_seconds,
         )
 
     @mcp.tool()
@@ -209,18 +219,14 @@ def create_server() -> FastMCP:
         action: Literal["list", "get", "search"],
         name: str | None = None,
         query: str | None = None,
-        namespace: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
+        profile: str | None = None,
     ) -> dict[str, Any]:
         """Discover workflow templates."""
         return await patterns.patterns(
             action=action,
             name=name,
             query=query,
-            namespace=namespace,
-            limit=limit,
-            offset=offset,
+            profile=profile,
         )
 
     return mcp

@@ -25,9 +25,7 @@ async def patterns(
     action: Literal["list", "get", "search"],
     name: str | None = None,
     query: str | None = None,
-    namespace: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    profile: str | None = None,
 ) -> dict[str, Any]:
     """Discover workflow templates.
 
@@ -35,9 +33,7 @@ async def patterns(
         action: list|get|search.
         name: Pattern name (for get).
         query: Search query (for search).
-        namespace: Filter by namespace.
-        limit: Max results.
-        offset: Pagination offset.
+        profile: Filter patterns by ICP profile name.
 
     Returns:
         {patterns: [...]} or {pattern: {...}}
@@ -48,11 +44,7 @@ async def patterns(
         payload["name"] = name
     if query:
         payload["query"] = query
-    if namespace:
-        payload["namespace"] = namespace
-    if limit != 50:
-        payload["limit"] = limit
-    if offset > 0:
-        payload["offset"] = offset
+    if profile:
+        payload["profile"] = profile
 
     return await client.post("/v1/context/patterns", payload)
