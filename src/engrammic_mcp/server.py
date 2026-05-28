@@ -5,14 +5,8 @@ from typing import Any, Literal
 from fastmcp import FastMCP
 
 from engrammic_mcp.tools import (
-    # Verb-based agent surface tools
     believe,
     commit,
-    # Internal-only tools (not in any profile)
-    context_accept_belief,
-    context_admin,
-    context_belief_state,
-    context_reject_belief,
     hypothesize,
     learn,
     link,
@@ -47,10 +41,7 @@ def create_server() -> FastMCP:
             "- Use recall before storing to avoid duplicates\n\n"
             "Onboarding:\n"
             "- At session start, call patterns(action='get', name='onboarding') "
-            "for your workflow guide\n\n"
-            "Internal-only tools (SAGE and admin use only):\n"
-            "context_admin, context_accept_belief, context_reject_belief, "
-            "context_belief_state"
+            "for your workflow guide"
         ),
     )
 
@@ -230,54 +221,6 @@ def create_server() -> FastMCP:
             namespace=namespace,
             limit=limit,
             offset=offset,
-        )
-
-    # --- Internal-only tools (SAGE and admin use only, not in any profile) ---
-
-    @mcp.tool()
-    async def context_admin_tool(
-        action: Literal["whoami", "usage", "provenance", "history"],
-        node_id: str | None = None,
-        since: str | None = None,
-    ) -> dict[str, Any]:
-        """Administrative operations."""
-        return await context_admin.admin(
-            action=action,
-            node_id=node_id,
-            since=since,
-        )
-
-    @mcp.tool()
-    async def context_belief_state_tool(
-        session_id: str,
-        about: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """Query session's active WorkingHypotheses with contradiction detection."""
-        return await context_belief_state.belief_state(
-            session_id=session_id,
-            about=about,
-        )
-
-    @mcp.tool()
-    async def context_accept_belief_tool(
-        belief_id: str,
-        confidence: float | None = None,
-    ) -> dict[str, Any]:
-        """Accept a ProposedBelief and promote it to Belief."""
-        return await context_accept_belief.accept_belief(
-            belief_id=belief_id,
-            confidence=confidence,
-        )
-
-    @mcp.tool()
-    async def context_reject_belief_tool(
-        belief_id: str,
-        reason: str | None = None,
-    ) -> dict[str, Any]:
-        """Reject a ProposedBelief."""
-        return await context_reject_belief.reject_belief(
-            belief_id=belief_id,
-            reason=reason,
         )
 
     return mcp

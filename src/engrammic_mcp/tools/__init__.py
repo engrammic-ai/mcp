@@ -1,14 +1,8 @@
 """MCP tool implementations for Engrammic."""
 
 from engrammic_mcp.tools import (
-    # Verb-based agent surface tools
     believe,
     commit,
-    # Internal-only tools (not in any profile)
-    context_accept_belief,
-    context_admin,
-    context_belief_state,
-    context_reject_belief,
     hypothesize,
     learn,
     link,
@@ -22,12 +16,6 @@ from engrammic_mcp.tools import (
 )
 
 __all__ = [
-    # Internal-only tools (not in any profile)
-    "context_accept_belief",
-    "context_admin",
-    "context_belief_state",
-    "context_reject_belief",
-    # Verb-based agent surface tools
     "believe",
     "commit",
     "hypothesize",
