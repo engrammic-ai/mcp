@@ -430,15 +430,14 @@ fn update(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<
     // Refresh skills - use custom path if provided, otherwise refresh existing
     if let Some(custom_path) = skill_path {
         let path = std::path::PathBuf::from(custom_path);
-        let results = skills::install_skills(&[path])?;
+        let results = skills::install_skills_to_paths(&[path])?;
         for (p, count) in results {
             println!("{} Refreshed {} skills in {}", "✓".green(), count, p.display());
         }
     } else {
-        let dests_with_skills: Vec<std::path::PathBuf> = SkillDest::all()
+        let dests_with_skills: Vec<SkillDest> = SkillDest::all()
             .into_iter()
             .filter(|d| skills::count_skills(&d.path) > 0)
-            .map(|d| d.path)
             .collect();
 
         if !dests_with_skills.is_empty() {
@@ -467,7 +466,7 @@ fn uninstall(yes: bool, tool_id: Option<&str>) -> Result<()> {
     }
 
     for dest in SkillDest::all() {
-        let removed = skills::remove_skills(&dest.path)?;
+        let removed = skills::remove_skills_formatted(&dest)?;
         if removed > 0 {
             println!(
                 "{} Removed {} skills from {}",
@@ -697,10 +696,10 @@ fn install_docker() -> Result<()> {
 }
 
 fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
-    // If custom skill path provided, use it directly
+    // If custom skill path provided, use it directly (Directory format assumed)
     if let Some(custom_path) = skill_path {
         let path = std::path::PathBuf::from(custom_path);
-        let results = skills::install_skills(&[path.clone()])?;
+        let results = skills::install_skills_to_paths(&[path])?;
         println!("{}", "Installing skills".bold());
         for (p, count) in results {
             println!(
@@ -760,8 +759,8 @@ fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let paths: Vec<std::path::PathBuf> = chosen.iter().map(|d| d.path.clone()).collect();
-    let results = skills::install_skills(&paths)?;
+    let dests_vec: Vec<SkillDest> = chosen.into_iter().cloned().collect();
+    let results = skills::install_skills(&dests_vec)?;
 
     println!("{}", "Installing skills".bold());
     for (path, count) in results {

@@ -8,6 +8,9 @@ use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
 use tar::Archive;
 
+use crate::skill_format::{merge_into_gemini_md, remove_from_gemini_md, to_cursor_mdc, SkillEntry};
+use crate::tools::{SkillDest, SkillFormat};
+
 const SKILL_PREFIX: &str = "engrammic-";
 
 pub fn count_skills(dest: &Path) -> usize {
@@ -79,6 +82,140 @@ pub fn remove_skills(dest: &Path) -> Result<usize> {
     Ok(count)
 }
 
+/// Install skills into a single destination, dispatching on format.
+pub fn install_skills_formatted(src: &Path, dest: &SkillDest) -> Result<usize> {
+    match dest.format {
+        SkillFormat::Directory => copy_skills(src, &dest.path),
+        SkillFormat::CursorMdc => copy_skills_as_mdc(src, &dest.path),
+        SkillFormat::GeminiMd => merge_skills_to_gemini(src, &dest.path),
+    }
+}
+
+/// Copy each `engrammic-<name>/SKILL.md` as `engrammic-<name>.mdc` into dest_dir.
+pub fn copy_skills_as_mdc(src: &Path, dest_dir: &Path) -> Result<usize> {
+    fs::create_dir_all(dest_dir)
+        .with_context(|| format!("failed to create {}", dest_dir.display()))?;
+    let mut count = 0;
+    for entry in fs::read_dir(src)
+        .with_context(|| format!("failed to read {}", src.display()))?
+    {
+        let entry = entry?;
+        let dir_name = entry.file_name();
+        let dir_name_str = dir_name.to_string_lossy();
+        if !dir_name_str.starts_with(SKILL_PREFIX) || !entry.path().is_dir() {
+            continue;
+        }
+        let skill_md = entry.path().join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+        let content = fs::read_to_string(&skill_md)
+            .with_context(|| format!("failed to read {}", skill_md.display()))?;
+        let mdc = to_cursor_mdc(&content);
+        let out_name = format!("{}.mdc", dir_name_str);
+        let out_path = dest_dir.join(&out_name);
+        fs::write(&out_path, mdc)
+            .with_context(|| format!("failed to write {}", out_path.display()))?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Collect all skills from src and merge them into the single dest_file (GEMINI.md).
+pub fn merge_skills_to_gemini(src: &Path, dest_file: &Path) -> Result<usize> {
+    if let Some(parent) = dest_file.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+    }
+
+    let mut entries: Vec<SkillEntry> = Vec::new();
+    for entry in fs::read_dir(src)
+        .with_context(|| format!("failed to read {}", src.display()))?
+    {
+        let entry = entry?;
+        let dir_name = entry.file_name();
+        let dir_name_str = dir_name.to_string_lossy();
+        if !dir_name_str.starts_with(SKILL_PREFIX) || !entry.path().is_dir() {
+            continue;
+        }
+        let skill_md = entry.path().join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+        let content = fs::read_to_string(&skill_md)
+            .with_context(|| format!("failed to read {}", skill_md.display()))?;
+        let meta = crate::skill_format::parse_skill_metadata(&content);
+        let body = crate::skill_format::extract_body(&content).to_string();
+        // Skill name: strip "engrammic-" prefix from directory name.
+        let name = dir_name_str
+            .strip_prefix(SKILL_PREFIX)
+            .unwrap_or(&dir_name_str)
+            .to_string();
+        entries.push(SkillEntry {
+            name,
+            description: meta.description,
+            body,
+        });
+    }
+
+    let count = entries.len();
+    let existing = if dest_file.exists() {
+        fs::read_to_string(dest_file)
+            .with_context(|| format!("failed to read {}", dest_file.display()))?
+    } else {
+        String::new()
+    };
+    let merged = merge_into_gemini_md(&existing, &entries);
+    fs::write(dest_file, merged)
+        .with_context(|| format!("failed to write {}", dest_file.display()))?;
+    Ok(count)
+}
+
+/// Remove skills from a destination, dispatching on format.
+pub fn remove_skills_formatted(dest: &SkillDest) -> Result<usize> {
+    match dest.format {
+        SkillFormat::Directory => remove_skills(&dest.path),
+        SkillFormat::CursorMdc => remove_mdc_skills(&dest.path),
+        SkillFormat::GeminiMd => remove_gemini_skills(&dest.path),
+    }
+}
+
+/// Remove all `engrammic-*.mdc` files from dir.
+pub fn remove_mdc_skills(dir: &Path) -> Result<usize> {
+    let mut count = 0;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(0);
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with(SKILL_PREFIX) && name_str.ends_with(".mdc") {
+            fs::remove_file(entry.path())?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Remove the Engrammic section from a GEMINI.md file.
+/// Returns 1 if markers were found and removed, 0 otherwise.
+pub fn remove_gemini_skills(file: &Path) -> Result<usize> {
+    if !file.exists() {
+        return Ok(0);
+    }
+    let content = fs::read_to_string(file)
+        .with_context(|| format!("failed to read {}", file.display()))?;
+    let cleaned = remove_from_gemini_md(&content);
+    if cleaned == content {
+        return Ok(0);
+    }
+    fs::write(file, cleaned)
+        .with_context(|| format!("failed to write {}", file.display()))?;
+    Ok(1)
+}
+
 pub fn unpack_tarball(gz_bytes: &[u8], dest: &Path) -> Result<PathBuf> {
     fs::create_dir_all(dest)?;
     let decoder = GzDecoder::new(gz_bytes);
@@ -113,9 +250,10 @@ pub fn download_skills_tarball() -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Downloads, unpacks, and copies skills into each destination.
-/// Returns one (destination, skill count) pair per destination.
-pub fn install_skills(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)>> {
+/// Downloads, unpacks, and installs skills into each destination.
+/// Dispatches based on the destination format.
+/// Returns one (destination path, skill count) pair per destination.
+pub fn install_skills(dests: &[SkillDest]) -> Result<Vec<(PathBuf, usize)>> {
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::with_template("  {spinner} {msg}")
@@ -129,6 +267,39 @@ pub fn install_skills(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)>> {
 
     let tmp = std::env::temp_dir()
         .join(format!("engrammic-skills-unpack-{}", std::process::id()));
+    if tmp.exists() {
+        fs::remove_dir_all(&tmp).ok();
+    }
+    let src = unpack_tarball(&bytes, &tmp)?;
+
+    let mut results = Vec::new();
+    for dest in dests {
+        let count = install_skills_formatted(&src, dest)?;
+        results.push((dest.path.clone(), count));
+    }
+
+    fs::remove_dir_all(&tmp).ok();
+    Ok(results)
+}
+
+/// Downloads, unpacks, and copies skills into raw path destinations using Directory format.
+///
+/// This is a compatibility shim for callsites that only have a PathBuf (e.g. the
+/// `--skill-path` CLI flag which has no format information).
+pub fn install_skills_to_paths(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)>> {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::with_template("  {spinner} {msg}")
+            .expect("valid spinner template"),
+    );
+    spinner.enable_steady_tick(Duration::from_millis(80));
+    spinner.set_message("Downloading skills...");
+
+    let bytes = download_skills_tarball()?;
+    spinner.finish_and_clear();
+
+    let tmp = std::env::temp_dir()
+        .join(format!("engrammic-skills-unpack-paths-{}", std::process::id()));
     if tmp.exists() {
         fs::remove_dir_all(&tmp).ok();
     }
@@ -240,5 +411,245 @@ mod tests {
         let top = unpack_tarball(&gz, dest.path()).unwrap();
         assert!(top.ends_with("skills-main"));
         assert!(top.join("engrammic-recall/SKILL.md").exists());
+    }
+
+    fn make_skill_with_content(root: &std::path::Path, dir_name: &str, content: &str) {
+        let dir = root.join(dir_name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), content).unwrap();
+    }
+
+    // ---- copy_skills_as_mdc ----
+
+    #[test]
+    fn copy_skills_as_mdc_creates_mdc_files() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Search memory\n---\n\nBody.",
+        );
+        make_skill_with_content(
+            src.path(),
+            "engrammic-learn",
+            "---\nname: learn\ndescription: Store knowledge\n---\n\nBody.",
+        );
+
+        let count = copy_skills_as_mdc(src.path(), dest.path()).unwrap();
+        assert_eq!(count, 2);
+        assert!(dest.path().join("engrammic-recall.mdc").exists());
+        assert!(dest.path().join("engrammic-learn.mdc").exists());
+    }
+
+    #[test]
+    fn copy_skills_as_mdc_skips_non_prefixed_dirs() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Desc\n---\n\nBody.",
+        );
+        make_skill_with_content(src.path(), "unrelated-tool", "---\nname: x\n---\n\nBody.");
+        fs::write(src.path().join("README.md"), "x").unwrap();
+
+        let count = copy_skills_as_mdc(src.path(), dest.path()).unwrap();
+        assert_eq!(count, 1);
+        assert!(!dest.path().join("unrelated-tool.mdc").exists());
+        assert!(!dest.path().join("README.md.mdc").exists());
+    }
+
+    #[test]
+    fn copy_skills_as_mdc_mdc_content_has_cursor_frontmatter() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Search memory\n---\n\nBody here.",
+        );
+        copy_skills_as_mdc(src.path(), dest.path()).unwrap();
+        let mdc = fs::read_to_string(dest.path().join("engrammic-recall.mdc")).unwrap();
+        assert!(mdc.contains("description: Search memory"));
+        assert!(mdc.contains("globs: "));
+        assert!(mdc.contains("Body here."));
+    }
+
+    #[test]
+    fn copy_skills_as_mdc_roundtrip_install_remove() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Desc\n---\n\nBody.",
+        );
+        // Install
+        let count = copy_skills_as_mdc(src.path(), dest.path()).unwrap();
+        assert_eq!(count, 1);
+        assert!(dest.path().join("engrammic-recall.mdc").exists());
+        // Add unrelated .mdc that should be preserved
+        fs::write(dest.path().join("other-rule.mdc"), "unrelated").unwrap();
+        // Remove
+        let removed = remove_mdc_skills(dest.path()).unwrap();
+        assert_eq!(removed, 1);
+        assert!(!dest.path().join("engrammic-recall.mdc").exists());
+        assert!(dest.path().join("other-rule.mdc").exists());
+    }
+
+    // ---- merge_skills_to_gemini ----
+
+    #[test]
+    fn merge_skills_to_gemini_creates_file() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let dest_file = dest.path().join("GEMINI.md");
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Search memory\n---\n\nBody.",
+        );
+
+        let count = merge_skills_to_gemini(src.path(), &dest_file).unwrap();
+        assert_eq!(count, 1);
+        assert!(dest_file.exists());
+        let content = fs::read_to_string(&dest_file).unwrap();
+        assert!(content.contains("<!-- ENGRAMMIC:START -->"));
+        assert!(content.contains("<!-- ENGRAMMIC:END -->"));
+        assert!(content.contains("## engrammic-recall"));
+    }
+
+    #[test]
+    fn merge_skills_to_gemini_creates_parent_dir() {
+        let base = tempdir().unwrap();
+        let src = tempdir().unwrap();
+        let nested = base.path().join("subdir").join("deep");
+        let dest_file = nested.join("GEMINI.md");
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Desc\n---\n\nBody.",
+        );
+
+        let count = merge_skills_to_gemini(src.path(), &dest_file).unwrap();
+        assert_eq!(count, 1);
+        assert!(dest_file.exists());
+    }
+
+    #[test]
+    fn merge_skills_to_gemini_preserves_existing_content() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let dest_file = dest.path().join("GEMINI.md");
+        fs::write(&dest_file, "# My Rules\nUser content.").unwrap();
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Desc\n---\n\nBody.",
+        );
+
+        merge_skills_to_gemini(src.path(), &dest_file).unwrap();
+        let content = fs::read_to_string(&dest_file).unwrap();
+        assert!(content.contains("# My Rules"));
+        assert!(content.contains("User content."));
+        assert!(content.contains("## engrammic-recall"));
+    }
+
+    #[test]
+    fn merge_skills_to_gemini_is_idempotent() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let dest_file = dest.path().join("GEMINI.md");
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Desc\n---\n\nBody.",
+        );
+
+        merge_skills_to_gemini(src.path(), &dest_file).unwrap();
+        let first = fs::read_to_string(&dest_file).unwrap();
+        merge_skills_to_gemini(src.path(), &dest_file).unwrap();
+        let second = fs::read_to_string(&dest_file).unwrap();
+        assert_eq!(first, second);
+    }
+
+    // ---- remove_mdc_skills ----
+
+    #[test]
+    fn remove_mdc_skills_removes_only_engrammic_mdc() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("engrammic-recall.mdc"), "mdc").unwrap();
+        fs::write(dir.path().join("engrammic-learn.mdc"), "mdc").unwrap();
+        fs::write(dir.path().join("other-rule.mdc"), "keep").unwrap();
+        fs::write(dir.path().join("engrammic-keep.txt"), "keep").unwrap();
+
+        let removed = remove_mdc_skills(dir.path()).unwrap();
+        assert_eq!(removed, 2);
+        assert!(!dir.path().join("engrammic-recall.mdc").exists());
+        assert!(!dir.path().join("engrammic-learn.mdc").exists());
+        assert!(dir.path().join("other-rule.mdc").exists());
+        assert!(dir.path().join("engrammic-keep.txt").exists());
+    }
+
+    #[test]
+    fn remove_mdc_skills_missing_dir_returns_zero() {
+        let removed = remove_mdc_skills(std::path::Path::new("/no/such/dir")).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    // ---- remove_gemini_skills ----
+
+    #[test]
+    fn remove_gemini_skills_removes_engrammic_section() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        let content = "# Rules\nUser content.\n\n<!-- ENGRAMMIC:START -->\n## engrammic-recall\nBody.\n<!-- ENGRAMMIC:END -->\n";
+        fs::write(&file, content).unwrap();
+
+        let removed = remove_gemini_skills(&file).unwrap();
+        assert_eq!(removed, 1);
+        let after = fs::read_to_string(&file).unwrap();
+        assert!(!after.contains("<!-- ENGRAMMIC:START -->"));
+        assert!(after.contains("User content."));
+    }
+
+    #[test]
+    fn remove_gemini_skills_no_markers_returns_zero() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        fs::write(&file, "# Rules\nUser content.").unwrap();
+
+        let removed = remove_gemini_skills(&file).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn remove_gemini_skills_missing_file_returns_zero() {
+        let removed = remove_gemini_skills(std::path::Path::new("/no/such/GEMINI.md")).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn gemini_roundtrip_install_remove() {
+        let src = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let dest_file = dest.path().join("GEMINI.md");
+        let original = "# My Rules\nUser content.";
+        fs::write(&dest_file, original).unwrap();
+        make_skill_with_content(
+            src.path(),
+            "engrammic-recall",
+            "---\nname: recall\ndescription: Desc\n---\n\nBody.",
+        );
+
+        merge_skills_to_gemini(src.path(), &dest_file).unwrap();
+        let after_install = fs::read_to_string(&dest_file).unwrap();
+        assert!(after_install.contains("<!-- ENGRAMMIC:START -->"));
+
+        let removed = remove_gemini_skills(&dest_file).unwrap();
+        assert_eq!(removed, 1);
+        let after_remove = fs::read_to_string(&dest_file).unwrap();
+        assert_eq!(after_remove, original);
     }
 }
