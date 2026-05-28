@@ -15,6 +15,10 @@ pub struct Cli {
     /// Specify tool directly (claude, cursor, windsurf, antigravity, gemini, pi)
     #[arg(long, global = true)]
     pub tool: Option<String>,
+
+    /// Custom skill installation path (overrides harness defaults)
+    #[arg(long, global = true)]
+    pub skill_path: Option<String>,
 }
 
 #[derive(Subcommand)]

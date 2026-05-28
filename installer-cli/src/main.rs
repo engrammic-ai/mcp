@@ -37,8 +37,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command.unwrap_or(Commands::Install) {
-        Commands::Install => install(cli.yes, cli.tool.as_deref()),
-        Commands::Update => update(cli.yes, cli.tool.as_deref()),
+        Commands::Install => install(cli.yes, cli.tool.as_deref(), cli.skill_path.as_deref()),
+        Commands::Update => update(cli.yes, cli.tool.as_deref(), cli.skill_path.as_deref()),
         Commands::Uninstall => uninstall(cli.yes, cli.tool.as_deref()),
         Commands::Status => status(),
         Commands::Docker => install_docker(),
@@ -49,7 +49,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>) -> Result<()> {
+fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     let endpoint = config.endpoint.as_deref().unwrap_or(CLOUD_ENDPOINT);
     let is_self_hosted = endpoint == LOCAL_ENDPOINT;
 
@@ -127,7 +127,7 @@ fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>)
         }
 
         "Refresh skills" => {
-            install_skills_step(false)?;
+            install_skills_step(false, skill_path)?;
             println!();
             println!("{} Skills refreshed.", "✓".green());
         }
@@ -142,7 +142,7 @@ fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>)
 
         "Start fresh (reconfigure everything)" => {
             let endpoint = select_deployment_mode(&config)?;
-            run_full_install(endpoint, false, tool_id)?;
+            run_full_install(endpoint, false, tool_id, skill_path)?;
         }
 
         _ => {}
@@ -151,7 +151,7 @@ fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>)
     Ok(())
 }
 
-fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
+fn install(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
     let existing_config = user_config::UserConfig::load().unwrap_or_default();
@@ -159,7 +159,7 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
 
     // For returning users (not -y mode), show menu
     if has_existing_setup && !yes {
-        return handle_returning_user(existing_config, tool_id);
+        return handle_returning_user(existing_config, tool_id, skill_path);
     }
 
     // Fresh install or -y mode
@@ -169,10 +169,10 @@ fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
         select_deployment_mode(&existing_config)?
     };
 
-    run_full_install(endpoint, yes, tool_id)
+    run_full_install(endpoint, yes, tool_id, skill_path)
 }
 
-fn run_full_install(endpoint: String, yes: bool, tool_id: Option<&str>) -> Result<()> {
+fn run_full_install(endpoint: String, yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     let tools = select_tools(yes, tool_id)?;
     if tools.is_empty() {
         println!("{} No harness selected.", "!".yellow());
@@ -225,7 +225,7 @@ fn run_full_install(endpoint: String, yes: bool, tool_id: Option<&str>) -> Resul
     }
     println!();
 
-    install_skills_step(yes)?;
+    install_skills_step(yes, skill_path)?;
 
     // Save config so returning users get the menu
     let existing = user_config::UserConfig::load().unwrap_or_default();
@@ -410,7 +410,7 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     Ok(endpoint)
 }
 
-fn update(yes: bool, tool_id: Option<&str>) -> Result<()> {
+fn update(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
     let tools = select_tools(yes, tool_id)?;
@@ -424,22 +424,30 @@ fn update(yes: bool, tool_id: Option<&str>) -> Result<()> {
         }
     }
 
-    // Refresh skills in any destination that already has them.
-    let dests_with_skills: Vec<std::path::PathBuf> = SkillDest::all()
-        .into_iter()
-        .filter(|d| skills::count_skills(&d.path) > 0)
-        .map(|d| d.path)
-        .collect();
+    // Refresh skills - use custom path if provided, otherwise refresh existing
+    if let Some(custom_path) = skill_path {
+        let path = std::path::PathBuf::from(custom_path);
+        let results = skills::install_skills(&[path])?;
+        for (p, count) in results {
+            println!("{} Refreshed {} skills in {}", "✓".green(), count, p.display());
+        }
+    } else {
+        let dests_with_skills: Vec<std::path::PathBuf> = SkillDest::all()
+            .into_iter()
+            .filter(|d| skills::count_skills(&d.path) > 0)
+            .map(|d| d.path)
+            .collect();
 
-    if !dests_with_skills.is_empty() {
-        let results = skills::install_skills(&dests_with_skills)?;
-        for (path, count) in results {
-            println!(
-                "{} Refreshed {} skills in {}",
-                "✓".green(),
-                count,
-                path.display()
-            );
+        if !dests_with_skills.is_empty() {
+            let results = skills::install_skills(&dests_with_skills)?;
+            for (path, count) in results {
+                println!(
+                    "{} Refreshed {} skills in {}",
+                    "✓".green(),
+                    count,
+                    path.display()
+                );
+            }
         }
     }
 
@@ -685,7 +693,23 @@ fn install_docker() -> Result<()> {
     Ok(())
 }
 
-fn install_skills_step(yes: bool) -> Result<()> {
+fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
+    // If custom skill path provided, use it directly
+    if let Some(custom_path) = skill_path {
+        let path = std::path::PathBuf::from(custom_path);
+        let results = skills::install_skills(&[path.clone()])?;
+        println!("{}", "Installing skills".bold());
+        for (p, count) in results {
+            println!(
+                "  {} {} skills  {}",
+                "✓".green(),
+                count,
+                p.display().to_string().dimmed()
+            );
+        }
+        return Ok(());
+    }
+
     let proceed = if yes {
         true
     } else {
@@ -704,16 +728,27 @@ fn install_skills_step(yes: bool) -> Result<()> {
     let chosen: Vec<&SkillDest> = if yes {
         all_dests.iter().filter(|d| d.default).collect()
     } else {
-        let options: Vec<&str> = all_dests.iter().map(|d| d.name).collect();
+        let options: Vec<String> = all_dests
+            .iter()
+            .map(|d| {
+                let scope = match d.scope {
+                    tools::SkillScope::User => "(user)",
+                    tools::SkillScope::Project => "(project)",
+                };
+                format!("{:<25} {}", d.name, scope.dimmed())
+            })
+            .collect();
 
-        let picked = MultiSelect::new("Install skills to", options)
+        let picked = MultiSelect::new("Install skills to", options.iter().map(|s| s.as_str()).collect())
             .with_help_message("↑↓ move · space toggle · enter confirm")
             .with_render_config(render_config())
             .prompt()?;
 
         all_dests
             .iter()
-            .filter(|d| picked.contains(&d.name))
+            .enumerate()
+            .filter(|(i, _)| picked.contains(&options[*i].as_str()))
+            .map(|(_, d)| d)
             .collect()
     };
 
