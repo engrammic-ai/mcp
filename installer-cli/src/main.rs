@@ -45,6 +45,7 @@ fn main() -> Result<()> {
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
+        Commands::License => manage_license(),
     }
 }
 
@@ -685,6 +686,95 @@ fn upgrade_docker() -> Result<()> {
     println!(
         "{} Self-hosted stack upgraded to latest version.",
         "✓".green()
+    );
+
+    Ok(())
+}
+
+fn manage_license() -> Result<()> {
+    banner::print_banner();
+
+    let config = user_config::UserConfig::load().unwrap_or_default();
+
+    if config.endpoint.as_deref() != Some(LOCAL_ENDPOINT) {
+        println!(
+            "{} License management is only for self-hosted installations.",
+            "!".yellow()
+        );
+        println!("  Cloud users don't need a license key.");
+        return Ok(());
+    }
+
+    println!("{}", "Current license".bold());
+    if let Some(ref key) = config.license_key {
+        match license::validate_license_format(key) {
+            Ok(info) => {
+                println!("  Customer: {}", info.customer.cyan());
+                println!("  Days remaining: {}", info.days_remaining);
+                println!();
+            }
+            Err(e) => {
+                println!("  {} {}", "!".yellow(), e);
+                println!();
+            }
+        }
+    } else {
+        println!("  {} No license key configured.", "-".dimmed());
+        println!();
+    }
+
+    let update = Confirm::new("Update license key?")
+        .with_default(false)
+        .with_render_config(render_config())
+        .prompt()?;
+
+    if !update {
+        return Ok(());
+    }
+
+    let mut prompt = Text::new("License key")
+        .with_help_message("Starts with ENGR_ - get yours at engrammic.ai/self-hosted")
+        .with_render_config(render_config());
+
+    if let Some(ref key) = config.license_key {
+        prompt = prompt.with_default(key);
+    }
+
+    let new_key = prompt.prompt()?;
+
+    println!("{}", "Validating license".bold());
+    match license::validate_license_format(&new_key) {
+        Ok(info) => {
+            println!(
+                "  {} Valid - customer: {}, {} days remaining",
+                "✓".green(),
+                info.customer.cyan(),
+                info.days_remaining
+            );
+        }
+        Err(e) => {
+            println!("  {} {}", "✗".red(), e);
+            return Ok(());
+        }
+    }
+    println!();
+
+    let dir = user_config::UserConfig::dir();
+    docker::update_license_key(&dir, &new_key)?;
+
+    let new_config = user_config::UserConfig {
+        endpoint: config.endpoint,
+        license_key: Some(new_key),
+    };
+    new_config.save()?;
+
+    println!(
+        "{} License key updated. Restart Docker services to apply.",
+        "✓".green()
+    );
+    println!(
+        "  Run: {}",
+        format!("docker compose -f {}/docker-compose.yml restart", dir.display()).cyan()
     );
 
     Ok(())

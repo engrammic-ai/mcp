@@ -93,3 +93,35 @@ TELEMETRY_ENABLED=true
 
     Ok(())
 }
+
+/// Update the license key in an existing .env file.
+pub fn update_license_key(dir: &Path, license_key: &str) -> Result<()> {
+    let env_path = dir.join(".env");
+
+    if !env_path.exists() {
+        anyhow::bail!(
+            "No .env file found in {}. Run 'engrammic docker' first to install.",
+            dir.display()
+        );
+    }
+
+    let content = fs::read_to_string(&env_path)?;
+    let mut lines: Vec<String> = content.lines().map(String::from).collect();
+    let mut found = false;
+
+    for line in &mut lines {
+        if line.starts_with("ENGRAMMIC_LICENSE_KEY=") {
+            *line = format!("ENGRAMMIC_LICENSE_KEY={}", license_key);
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        lines.insert(1, format!("ENGRAMMIC_LICENSE_KEY={}", license_key));
+    }
+
+    fs::write(&env_path, lines.join("\n") + "\n")?;
+
+    Ok(())
+}

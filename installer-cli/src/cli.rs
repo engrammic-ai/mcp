@@ -35,4 +35,6 @@ pub enum Commands {
     Scale,
     /// Run diagnostic checks
     Doctor,
+    /// View or update license key (self-hosted only)
+    License,
 }
