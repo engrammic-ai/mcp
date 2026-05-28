@@ -357,8 +357,15 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
 
     let dir = std::path::Path::new(&install_dir);
 
+    // Telemetry consent.
+    let telemetry_enabled = Confirm::new("Share anonymous usage statistics?")
+        .with_default(true)
+        .with_help_message("Helps improve Engrammic. Can be changed later in .env")
+        .with_render_config(render_config())
+        .prompt()?;
+
     println!("{}", "Writing compose bundle".bold());
-    docker::write_compose_bundle(dir, &license_key)?;
+    docker::write_compose_bundle(dir, &license_key, telemetry_enabled)?;
     println!(
         "  {} {}",
         "✓".green(),
@@ -644,9 +651,16 @@ fn install_docker() -> Result<()> {
 
     let dir = std::path::Path::new(&install_dir);
 
+    // Telemetry consent.
+    let telemetry_enabled = Confirm::new("Share anonymous usage statistics?")
+        .with_default(true)
+        .with_help_message("Helps improve Engrammic. Can be changed later in .env")
+        .with_render_config(render_config())
+        .prompt()?;
+
     // Write compose bundle.
     println!("{}", "Writing compose bundle".bold());
-    docker::write_compose_bundle(dir, &license_key)?;
+    docker::write_compose_bundle(dir, &license_key, telemetry_enabled)?;
     println!(
         "  {} {}",
         "✓".green(),

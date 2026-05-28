@@ -63,7 +63,7 @@ pub const COMPOSE_TEMPLATE: &str = include_str!("../assets/docker-compose.yml");
 pub const README_TEMPLATE: &str = include_str!("../assets/README.md");
 
 /// Write compose file and .env to target directory.
-pub fn write_compose_bundle(dir: &Path, license_key: &str) -> Result<()> {
+pub fn write_compose_bundle(dir: &Path, license_key: &str, telemetry_enabled: bool) -> Result<()> {
     fs::create_dir_all(dir)?;
 
     let compose_path = dir.join("docker-compose.yml");
@@ -83,9 +83,11 @@ POSTGRES_PASSWORD=engrammic
 # LLM_PROVIDER=openai
 # LLM_API_KEY=sk-...
 
-TELEMETRY_ENABLED=true
+# Anonymous usage statistics (can be changed anytime)
+TELEMETRY_ENABLED={}
 "#,
-        license_key
+        license_key,
+        telemetry_enabled
     );
 
     let env_path = dir.join(".env");
