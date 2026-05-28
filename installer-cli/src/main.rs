@@ -5,9 +5,12 @@ mod doctor;
 mod docker;
 mod license;
 mod scale;
+mod skill_format;
 mod skills;
 mod tools;
 mod user_config;
+
+pub use skill_format::*;
 
 use anyhow::Result;
 use clap::Parser;
