@@ -437,7 +437,7 @@ fn update(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<
     } else {
         let dests_with_skills: Vec<SkillDest> = SkillDest::all()
             .into_iter()
-            .filter(|d| skills::count_skills(&d.path) > 0)
+            .filter(|d| skills::count_skills_formatted(d) > 0)
             .collect();
 
         if !dests_with_skills.is_empty() {
@@ -529,7 +529,7 @@ fn status() -> Result<()> {
     println!();
     println!("{}", "Skills".bold());
     for dest in SkillDest::all() {
-        let count = skills::count_skills(&dest.path);
+        let count = skills::count_skills_formatted(&dest);
         let label = if count > 0 {
             format!("{:<18}", format!("✓ {} skills", count)).green()
         } else {

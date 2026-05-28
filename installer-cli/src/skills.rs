@@ -26,6 +26,42 @@ pub fn count_skills(dest: &Path) -> usize {
         .count()
 }
 
+/// Count skills in a directory of `engrammic-*.mdc` files.
+pub fn count_mdc_skills(dir: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let s = name.to_string_lossy();
+            s.starts_with(SKILL_PREFIX) && s.ends_with(".mdc")
+        })
+        .count()
+}
+
+/// Return 1 if the file contains Engrammic markers, 0 otherwise.
+pub fn count_gemini_skills(file: &Path) -> usize {
+    let Ok(content) = fs::read_to_string(file) else {
+        return 0;
+    };
+    if content.contains("<!-- ENGRAMMIC:START -->") {
+        1
+    } else {
+        0
+    }
+}
+
+/// Count installed skills, dispatching on the destination format.
+pub fn count_skills_formatted(dest: &SkillDest) -> usize {
+    match dest.format {
+        SkillFormat::Directory => count_skills(&dest.path),
+        SkillFormat::CursorMdc => count_mdc_skills(&dest.path),
+        SkillFormat::GeminiMd => count_gemini_skills(&dest.path),
+    }
+}
+
 pub fn copy_skills(src: &Path, dest: &Path) -> Result<usize> {
     fs::create_dir_all(dest)
         .with_context(|| format!("failed to create {}", dest.display()))?;
@@ -363,6 +399,120 @@ mod tests {
     #[test]
     fn count_skills_on_missing_dir_is_zero() {
         assert_eq!(count_skills(std::path::Path::new("/no/such/dir")), 0);
+    }
+
+    // ---- count_mdc_skills ----
+
+    #[test]
+    fn count_mdc_skills_counts_only_engrammic_mdc_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("engrammic-recall.mdc"), "mdc").unwrap();
+        fs::write(dir.path().join("engrammic-learn.mdc"), "mdc").unwrap();
+        fs::write(dir.path().join("other-rule.mdc"), "mdc").unwrap();
+        fs::write(dir.path().join("engrammic-keep.txt"), "txt").unwrap();
+        assert_eq!(count_mdc_skills(dir.path()), 2);
+    }
+
+    #[test]
+    fn count_mdc_skills_on_missing_dir_is_zero() {
+        assert_eq!(count_mdc_skills(std::path::Path::new("/no/such/dir")), 0);
+    }
+
+    // ---- count_gemini_skills ----
+
+    #[test]
+    fn count_gemini_skills_returns_one_when_markers_present() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        fs::write(&file, "# Rules\n<!-- ENGRAMMIC:START -->\ncontent\n<!-- ENGRAMMIC:END -->\n").unwrap();
+        assert_eq!(count_gemini_skills(&file), 1);
+    }
+
+    #[test]
+    fn count_gemini_skills_returns_zero_when_no_markers() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        fs::write(&file, "# Rules\nUser content only.").unwrap();
+        assert_eq!(count_gemini_skills(&file), 0);
+    }
+
+    #[test]
+    fn count_gemini_skills_on_missing_file_is_zero() {
+        assert_eq!(count_gemini_skills(std::path::Path::new("/no/such/GEMINI.md")), 0);
+    }
+
+    // ---- count_skills_formatted ----
+
+    #[test]
+    fn count_skills_formatted_dispatches_directory() {
+        use crate::tools::{SkillDest, SkillFormat, SkillScope};
+        let dir = tempdir().unwrap();
+        make_skill(dir.path(), "engrammic-recall");
+        make_skill(dir.path(), "engrammic-learn");
+        let dest = SkillDest {
+            name: "test",
+            harness: "test",
+            path: dir.path().to_path_buf(),
+            format: SkillFormat::Directory,
+            default: false,
+            scope: SkillScope::User,
+            note: None,
+        };
+        assert_eq!(count_skills_formatted(&dest), 2);
+    }
+
+    #[test]
+    fn count_skills_formatted_dispatches_cursor_mdc() {
+        use crate::tools::{SkillDest, SkillFormat, SkillScope};
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("engrammic-recall.mdc"), "mdc").unwrap();
+        fs::write(dir.path().join("other.mdc"), "other").unwrap();
+        let dest = SkillDest {
+            name: "test",
+            harness: "test",
+            path: dir.path().to_path_buf(),
+            format: SkillFormat::CursorMdc,
+            default: false,
+            scope: SkillScope::User,
+            note: None,
+        };
+        assert_eq!(count_skills_formatted(&dest), 1);
+    }
+
+    #[test]
+    fn count_skills_formatted_dispatches_gemini_md() {
+        use crate::tools::{SkillDest, SkillFormat, SkillScope};
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        fs::write(&file, "<!-- ENGRAMMIC:START -->\ncontent\n<!-- ENGRAMMIC:END -->").unwrap();
+        let dest = SkillDest {
+            name: "test",
+            harness: "test",
+            path: file,
+            format: SkillFormat::GeminiMd,
+            default: false,
+            scope: SkillScope::User,
+            note: None,
+        };
+        assert_eq!(count_skills_formatted(&dest), 1);
+    }
+
+    #[test]
+    fn count_skills_formatted_gemini_md_no_markers_is_zero() {
+        use crate::tools::{SkillDest, SkillFormat, SkillScope};
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        fs::write(&file, "# Rules\nNo engrammic content.").unwrap();
+        let dest = SkillDest {
+            name: "test",
+            harness: "test",
+            path: file,
+            format: SkillFormat::GeminiMd,
+            default: false,
+            scope: SkillScope::User,
+            note: None,
+        };
+        assert_eq!(count_skills_formatted(&dest), 0);
     }
 
     #[test]
