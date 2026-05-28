@@ -5,8 +5,9 @@ const INNER_WIDTH: usize = 45;
 
 /// The text content of the banner, one entry per content line.
 pub fn banner_lines() -> Vec<String> {
+    let version = env!("CARGO_PKG_VERSION");
     vec![
-        "engrammic   MCP Setup".to_string(),
+        format!("engrammic   MCP Setup v{}", version),
         "epistemic memory for AI agents".to_string(),
         "engrammic.ai".to_string(),
     ]
