@@ -1,10 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = "engrammic-ai/mcp"
-$Binary = "engrammic-install"
+$Binary = "engrammic"
 
 Write-Host ""
-Write-Host "Engrammic MCP Installer"
+Write-Host "Engrammic MCP Setup"
 Write-Host ""
 
 # Windows is always x86_64-pc-windows-msvc for now
