@@ -96,6 +96,59 @@ TELEMETRY_ENABLED={}
     Ok(())
 }
 
+/// Check if the current compose file differs from the embedded template.
+/// Returns list of new services if template has services the current file doesn't.
+pub fn check_compose_updates(dir: &Path) -> Result<Option<Vec<String>>> {
+    let compose_path = dir.join("docker-compose.yml");
+
+    if !compose_path.exists() {
+        return Ok(None);
+    }
+
+    let current = fs::read_to_string(&compose_path)?;
+
+    // Simple service detection: look for "  servicename:" pattern
+    let current_services: Vec<&str> = current
+        .lines()
+        .filter(|l| l.starts_with("  ") && l.ends_with(":") && !l.contains("#"))
+        .filter_map(|l| l.trim().strip_suffix(':'))
+        .collect();
+
+    let template_services: Vec<&str> = COMPOSE_TEMPLATE
+        .lines()
+        .filter(|l| l.starts_with("  ") && l.ends_with(":") && !l.contains("#"))
+        .filter_map(|l| l.trim().strip_suffix(':'))
+        .collect();
+
+    let new_services: Vec<String> = template_services
+        .iter()
+        .filter(|s| !current_services.contains(s))
+        .map(|s| s.to_string())
+        .collect();
+
+    if new_services.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(new_services))
+    }
+}
+
+/// Refresh compose file with latest template, preserving .env.
+pub fn refresh_compose(dir: &Path) -> Result<()> {
+    let compose_path = dir.join("docker-compose.yml");
+    let backup_path = dir.join("docker-compose.yml.bak");
+
+    // Backup existing
+    if compose_path.exists() {
+        fs::copy(&compose_path, &backup_path)?;
+    }
+
+    // Write new template
+    fs::write(&compose_path, COMPOSE_TEMPLATE)?;
+
+    Ok(())
+}
+
 /// Update the license key in an existing .env file.
 pub fn update_license_key(dir: &Path, license_key: &str) -> Result<()> {
     let env_path = dir.join(".env");

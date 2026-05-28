@@ -866,6 +866,27 @@ fn upgrade_docker() -> Result<()> {
         return Ok(());
     }
 
+    // Check if compose file has updates available
+    if let Some(new_services) = docker::check_compose_updates(&dir)? {
+        println!(
+            "{} New services available: {}",
+            "!".yellow(),
+            new_services.join(", ").cyan()
+        );
+
+        let update_compose = Confirm::new("Update docker-compose.yml to include new services?")
+            .with_default(true)
+            .with_help_message("Your .env will be preserved. Old compose backed up to .bak")
+            .with_render_config(render_config())
+            .prompt()?;
+
+        if update_compose {
+            docker::refresh_compose(&dir)?;
+            println!("  {} docker-compose.yml updated", "✓".green());
+        }
+        println!();
+    }
+
     docker::upgrade_docker_stack(&dir)?;
 
     println!();
