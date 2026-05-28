@@ -7,6 +7,8 @@ from fastmcp import FastMCP
 from engrammic_mcp.tools import (
     believe,
     commit,
+    dismiss,
+    forget,
     hypothesize,
     learn,
     link,
@@ -16,6 +18,7 @@ from engrammic_mcp.tools import (
     reflect,
     remember,
     revise,
+    tick,
     trace,
 )
 
@@ -227,6 +230,47 @@ def create_server() -> FastMCP:
             name=name,
             query=query,
             profile=profile,
+        )
+
+    @mcp.tool()
+    async def forget_tool(
+        node_id: str,
+        reason: str | None = None,
+        cascade: bool = False,
+    ) -> dict[str, Any]:
+        """Request deletion of a node."""
+        return await forget.forget(
+            node_id=node_id,
+            reason=reason,
+            cascade=cascade,
+        )
+
+    @mcp.tool()
+    async def dismiss_tool(
+        marker_id: str,
+        reason: str,
+        silo_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Dismiss an engagement marker without resolving it."""
+        return await dismiss.dismiss(
+            marker_id=marker_id,
+            reason=reason,
+            silo_id=silo_id,
+        )
+
+    @mcp.tool()
+    async def tick_tool(
+        about_hint: list[str] | None = None,
+        silo_id: str | None = None,
+        session_id: str | None = None,
+        recent_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Session heartbeat - returns engagement nudges."""
+        return await tick.tick(
+            about_hint=about_hint,
+            silo_id=silo_id,
+            session_id=session_id,
+            recent_context=recent_context,
         )
 
     return mcp

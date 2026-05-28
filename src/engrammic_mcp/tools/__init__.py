@@ -3,6 +3,8 @@
 from engrammic_mcp.tools import (
     believe,
     commit,
+    dismiss,
+    forget,
     hypothesize,
     learn,
     link,
@@ -12,12 +14,15 @@ from engrammic_mcp.tools import (
     reflect,
     remember,
     revise,
+    tick,
     trace,
 )
 
 __all__ = [
     "believe",
     "commit",
+    "dismiss",
+    "forget",
     "hypothesize",
     "learn",
     "link",
@@ -27,5 +32,6 @@ __all__ = [
     "reflect",
     "remember",
     "revise",
+    "tick",
     "trace",
 ]
