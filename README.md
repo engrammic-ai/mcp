@@ -61,8 +61,6 @@ Trace why you believe something:
 | `hypothesize` | Form tentative beliefs |
 | `revise` | Update tentative hypotheses |
 | `commit` | Crystallize hypotheses to commitments |
-| `accept` | Ratify system-synthesized beliefs |
-| `reject` | Reject system-synthesized beliefs |
 | `forget` | Request node deletion |
 | `dismiss` | Dismiss contradiction markers |
 | `patterns` | Discover workflow templates |
