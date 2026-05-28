@@ -49,36 +49,130 @@ fn main() -> Result<()> {
     }
 }
 
+fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>) -> Result<()> {
+    let endpoint = config.endpoint.as_deref().unwrap_or(CLOUD_ENDPOINT);
+    let is_self_hosted = endpoint == LOCAL_ENDPOINT;
+
+    println!("{}", "Current setup".bold());
+    println!(
+        "  Mode: {}",
+        if is_self_hosted { "Self-hosted".cyan() } else { "Cloud".cyan() }
+    );
+    println!("  Endpoint: {}", endpoint.dimmed());
+
+    if is_self_hosted {
+        if let Some(ref key) = config.license_key {
+            match license::validate_license_format(key) {
+                Ok(info) => {
+                    println!(
+                        "  License: {} ({} days remaining)",
+                        info.customer.cyan(),
+                        info.days_remaining
+                    );
+                }
+                Err(_) => {
+                    println!("  License: {}", "invalid or expired".yellow());
+                }
+            }
+        }
+    }
+    println!();
+
+    let mut options = vec![
+        "Add or update harnesses",
+        "Refresh skills",
+        "View full status",
+    ];
+
+    if is_self_hosted {
+        options.push("Update license key");
+    }
+
+    options.push("Start fresh (reconfigure everything)");
+
+    let choice = Select::new("What would you like to do?", options)
+        .with_render_config(render_config())
+        .prompt()?;
+
+    match choice {
+        "Add or update harnesses" => {
+            let tools = select_tools(false, tool_id)?;
+            if tools.is_empty() {
+                println!("{} No harness selected.", "!".yellow());
+                return Ok(());
+            }
+
+            println!("{}", "Configuring harnesses".bold());
+            for tool in &tools {
+                let result = config::install(&tool.config_path, endpoint)?;
+                match result {
+                    config::InstallResult::Created => {
+                        println!("  {} {} {}", "✓".green(), tool.name, "(added)".dimmed());
+                    }
+                    config::InstallResult::Updated { old_url } => {
+                        println!(
+                            "  {} {} {}",
+                            "✓".green(),
+                            tool.name,
+                            format!("(updated: {} -> {})", old_url, endpoint).dimmed()
+                        );
+                    }
+                    config::InstallResult::Unchanged => {
+                        println!("  {} {} {}", "-".dimmed(), tool.name, "(unchanged)".dimmed());
+                    }
+                }
+            }
+            println!();
+            println!("{} Done.", "✓".green());
+        }
+
+        "Refresh skills" => {
+            install_skills_step(false)?;
+            println!();
+            println!("{} Skills refreshed.", "✓".green());
+        }
+
+        "View full status" => {
+            status()?;
+        }
+
+        "Update license key" => {
+            manage_license()?;
+        }
+
+        "Start fresh (reconfigure everything)" => {
+            let endpoint = select_deployment_mode(&config)?;
+            run_full_install(endpoint, false, tool_id)?;
+        }
+
+        _ => {}
+    }
+
+    Ok(())
+}
+
 fn install(yes: bool, tool_id: Option<&str>) -> Result<()> {
     banner::print_banner();
 
     let existing_config = user_config::UserConfig::load().unwrap_or_default();
+    let has_existing_setup = existing_config.endpoint.is_some();
 
+    // For returning users (not -y mode), show menu
+    if has_existing_setup && !yes {
+        return handle_returning_user(existing_config, tool_id);
+    }
+
+    // Fresh install or -y mode
     let endpoint = if yes {
         existing_config.endpoint.unwrap_or_else(|| CLOUD_ENDPOINT.to_string())
-    } else if let Some(ref ep) = existing_config.endpoint {
-        println!(
-            "{} Found existing config: {}",
-            "i".cyan(),
-            user_config::UserConfig::path().display()
-        );
-        println!("  Endpoint: {}", ep.cyan());
-        println!();
-
-        let use_existing = Confirm::new("Use this endpoint?")
-            .with_default(true)
-            .with_render_config(render_config())
-            .prompt()?;
-
-        if use_existing {
-            ep.clone()
-        } else {
-            select_deployment_mode(&existing_config)?
-        }
     } else {
         select_deployment_mode(&existing_config)?
     };
 
+    run_full_install(endpoint, yes, tool_id)
+}
+
+fn run_full_install(endpoint: String, yes: bool, tool_id: Option<&str>) -> Result<()> {
     let tools = select_tools(yes, tool_id)?;
     if tools.is_empty() {
         println!("{} No harness selected.", "!".yellow());
@@ -164,6 +258,35 @@ fn select_deployment_mode(existing_config: &user_config::UserConfig) -> Result<S
     }
 }
 
+fn prompt_for_license(default: Option<&str>) -> Result<String> {
+    let mut prompt = Text::new("License key")
+        .with_help_message("Starts with ENGR_ - get yours at engrammic.ai/self-hosted")
+        .with_render_config(render_config());
+
+    if let Some(key) = default {
+        prompt = prompt.with_default(key);
+    }
+
+    let license_key = prompt.prompt()?;
+
+    println!("{}", "Validating license".bold());
+    match license::validate_license_format(&license_key) {
+        Ok(info) => {
+            println!(
+                "  {} Valid - customer: {}, {} days remaining",
+                "✓".green(),
+                info.customer.cyan(),
+                info.days_remaining
+            );
+            Ok(license_key)
+        }
+        Err(e) => {
+            println!("  {} {}", "✗".red(), e);
+            anyhow::bail!("Invalid license");
+        }
+    }
+}
+
 fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String> {
     println!();
     println!("{}", "Checking Docker".bold());
@@ -181,31 +304,35 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     println!("  {} Docker is running", "✓".green());
     println!();
 
-    let mut license_prompt = Text::new("License key")
-        .with_help_message("Starts with ENGR_ - get yours at engrammic.ai/self-hosted")
-        .with_render_config(render_config());
+    let license_key = if let Some(ref key) = existing_config.license_key {
+        println!("{}", "Existing license".bold());
+        match license::validate_license_format(key) {
+            Ok(info) => {
+                println!("  Customer: {}", info.customer.cyan());
+                println!("  Days remaining: {}", info.days_remaining);
+                println!();
 
-    if let Some(ref key) = existing_config.license_key {
-        license_prompt = license_prompt.with_default(key);
-    }
+                let keep = Confirm::new("Keep this license?")
+                    .with_default(true)
+                    .with_render_config(render_config())
+                    .prompt()?;
 
-    let license_key = license_prompt.prompt()?;
-
-    println!("{}", "Validating license".bold());
-    match license::validate_license_format(&license_key) {
-        Ok(info) => {
-            println!(
-                "  {} Valid - customer: {}, {} days remaining",
-                "✓".green(),
-                info.customer.cyan(),
-                info.days_remaining
-            );
+                if keep {
+                    key.clone()
+                } else {
+                    prompt_for_license(None)?
+                }
+            }
+            Err(e) => {
+                println!("  {} {} - needs update", "!".yellow(), e);
+                println!();
+                prompt_for_license(Some(key))?
+            }
         }
-        Err(e) => {
-            println!("  {} {}", "✗".red(), e);
-            anyhow::bail!("Invalid license");
-        }
-    }
+    } else {
+        prompt_for_license(None)?
+    };
+
     println!();
 
     let default_dir = user_config::UserConfig::dir();
