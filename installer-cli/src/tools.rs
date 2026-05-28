@@ -27,12 +27,12 @@ impl Tool {
             Tool {
                 name: "Windsurf",
                 id: "windsurf",
-                config_path: home.join(".windsurf/mcp.json"),
+                config_path: home.join(".codeium/windsurf/mcp_config.json"),
             },
             Tool {
                 name: "Antigravity",
                 id: "antigravity",
-                config_path: home.join(".antigravity/mcp.json"),
+                config_path: home.join(".gemini/antigravity/mcp_config.json"),
             },
             Tool {
                 name: "Gemini CLI",

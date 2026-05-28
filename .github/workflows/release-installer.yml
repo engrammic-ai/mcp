@@ -19,19 +19,19 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: engrammic-install
+            artifact: engrammic
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: engrammic-install
+            artifact: engrammic
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact: engrammic-install
+            artifact: engrammic
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact: engrammic-install
+            artifact: engrammic
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact: engrammic-install.exe
+            artifact: engrammic.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -55,14 +55,14 @@ jobs:
         shell: bash
         run: |
           src="installer-cli/target/${{ matrix.target }}/release/${{ matrix.artifact }}"
-          dst="engrammic-install-${{ matrix.target }}${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }}"
+          dst="engrammic-${{ matrix.target }}${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }}"
           cp "$src" "$dst"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: engrammic-install-${{ matrix.target }}
-          path: engrammic-install-${{ matrix.target }}*
+          name: engrammic-${{ matrix.target }}
+          path: engrammic-${{ matrix.target }}*
 
   release:
     name: Create Release

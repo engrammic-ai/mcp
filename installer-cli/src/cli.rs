@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "engrammic-install")]
-#[command(about = "Engrammic MCP installer")]
+#[command(name = "engrammic")]
+#[command(about = "Engrammic CLI - setup, update, and manage your Engrammic MCP integration")]
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]

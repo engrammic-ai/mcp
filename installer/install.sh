@@ -2,10 +2,10 @@
 set -euo pipefail
 
 REPO="engrammic-ai/mcp"
-BINARY="engrammic-install"
+BINARY="engrammic"
 
 echo ""
-echo "Engrammic MCP Installer"
+echo "Engrammic MCP Setup"
 echo ""
 
 # Detect OS and architecture
