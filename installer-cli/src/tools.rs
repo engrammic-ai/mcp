@@ -64,10 +64,17 @@ impl Tool {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SkillScope {
     User,    // Global, user-level
     Project, // Project-local
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum SkillFormat {
+    Directory,  // engrammic-<name>/SKILL.md
+    CursorMdc,  // .cursor/rules/engrammic-<name>.mdc
+    GeminiMd,   // Single GEMINI.md with markers
 }
 
 #[derive(Clone)]
@@ -76,6 +83,7 @@ pub struct SkillDest {
     pub harness: &'static str,
     pub path: PathBuf,
     pub scope: SkillScope,
+    pub format: SkillFormat,
     pub default: bool,
     pub note: Option<&'static str>,
 }
@@ -87,6 +95,9 @@ impl SkillDest {
         let claude_present = home.join(".claude").exists();
         let pi_present = home.join(".pi/agent").exists();
 
+        let cursor_present = home.join(".cursor").exists();
+        let gemini_present = home.join(".gemini").exists();
+
         vec![
             // === User-level (global) destinations ===
             SkillDest {
@@ -94,6 +105,7 @@ impl SkillDest {
                 harness: "claude",
                 path: home.join(".claude/skills"),
                 scope: SkillScope::User,
+                format: SkillFormat::Directory,
                 default: claude_present,
                 note: None,
             },
@@ -102,15 +114,44 @@ impl SkillDest {
                 harness: "pi",
                 path: home.join(".pi/agent/skills"),
                 scope: SkillScope::User,
+                format: SkillFormat::Directory,
                 default: pi_present && !claude_present,
                 note: None,
             },
+            SkillDest {
+                name: "Gemini CLI",
+                harness: "gemini",
+                path: home.join(".gemini/GEMINI.md"),
+                scope: SkillScope::User,
+                format: SkillFormat::GeminiMd,
+                default: gemini_present && !claude_present,
+                note: None,
+            },
             // === Project-level destinations ===
+            SkillDest {
+                name: "Cursor (project)",
+                harness: "cursor",
+                path: PathBuf::from(".cursor/rules"),
+                scope: SkillScope::Project,
+                format: SkillFormat::CursorMdc,
+                default: cursor_present,
+                note: None,
+            },
+            SkillDest {
+                name: "Gemini CLI (project)",
+                harness: "gemini",
+                path: PathBuf::from("GEMINI.md"),
+                scope: SkillScope::Project,
+                format: SkillFormat::GeminiMd,
+                default: false,
+                note: None,
+            },
             SkillDest {
                 name: "Windsurf (project)",
                 harness: "windsurf",
                 path: PathBuf::from(".windsurf/skills"),
                 scope: SkillScope::Project,
+                format: SkillFormat::Directory,
                 default: false,
                 note: None,
             },
@@ -119,6 +160,7 @@ impl SkillDest {
                 harness: "antigravity",
                 path: PathBuf::from(".agent/skills"),
                 scope: SkillScope::Project,
+                format: SkillFormat::Directory,
                 default: false,
                 note: None,
             },
@@ -127,6 +169,7 @@ impl SkillDest {
                 harness: "cross",
                 path: PathBuf::from(".agents/skills"),
                 scope: SkillScope::Project,
+                format: SkillFormat::Directory,
                 default: false,
                 note: Some("Works with Pi Agents, Claude Code"),
             },
