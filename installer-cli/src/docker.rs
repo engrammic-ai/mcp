@@ -74,16 +74,25 @@ pub fn write_compose_bundle(dir: &Path, license_key: &str, telemetry_enabled: bo
 
     let env_content = format!(
         r#"# Engrammic Self-Hosted Configuration
+
+# Required: Your license key
 ENGRAMMIC_LICENSE_KEY={}
 
-# Database passwords (change in production)
+# Database passwords (defaults work for local dev, change in production)
 POSTGRES_PASSWORD=engrammic
+# MEMGRAPH_PASSWORD=memgraph
 
-# Optional: LLM for full SAGE features
+# LLM for SAGE synthesis (optional)
+# Without these, SAGE runs in passive mode (storage + recall only)
 # LLM_PROVIDER=openai
 # LLM_API_KEY=sk-...
+# LLM_MODEL=gpt-4o-mini
 
-# Anonymous usage statistics (can be changed anytime)
+# Embeddings (optional, uses LLM provider by default)
+# EMBEDDING_PROVIDER=openai
+# EMBEDDING_MODEL=text-embedding-3-small
+
+# Anonymous usage statistics
 TELEMETRY_ENABLED={}
 "#,
         license_key,
