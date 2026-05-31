@@ -49,13 +49,14 @@ fn render_config() -> RenderConfig<'static> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let auto = !cli.interactive;
 
     match cli.command.unwrap_or(Commands::Install) {
-        Commands::Install => install(cli.yes, cli.tool.as_deref(), cli.skill_path.as_deref()),
-        Commands::Update => update(cli.yes, cli.tool.as_deref(), cli.skill_path.as_deref()),
-        Commands::Uninstall => uninstall(cli.yes, cli.tool.as_deref()),
+        Commands::Install => install(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
+        Commands::Update => update(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
+        Commands::Uninstall => uninstall(auto, cli.tool.as_deref()),
         Commands::Status => status(),
-        Commands::Skills => install_skills_only(cli.yes, cli.skill_path.as_deref()),
+        Commands::Skills => install_skills_only(auto, cli.skill_path.as_deref()),
         Commands::Docker => install_docker(),
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
@@ -185,19 +186,19 @@ fn handle_returning_user(
     Ok(())
 }
 
-fn install(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
+fn install(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
     let existing_config = user_config::UserConfig::load().unwrap_or_default();
     let has_existing_setup = existing_config.endpoint.is_some();
 
     // For returning users (not -y mode), show menu
-    if has_existing_setup && !yes {
+    if has_existing_setup && !auto {
         return handle_returning_user(existing_config, tool_id, skill_path);
     }
 
     // Fresh install or -y mode
-    let endpoint = if yes {
+    let endpoint = if auto {
         existing_config
             .endpoint
             .unwrap_or_else(|| CLOUD_ENDPOINT.to_string())
@@ -205,16 +206,16 @@ fn install(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
         select_deployment_mode(&existing_config)?
     };
 
-    run_full_install(endpoint, yes, tool_id, skill_path)
+    run_full_install(endpoint, auto, tool_id, skill_path)
 }
 
 fn run_full_install(
     endpoint: String,
-    yes: bool,
+    auto: bool,
     tool_id: Option<&str>,
     skill_path: Option<&str>,
 ) -> Result<()> {
-    let tools = select_tools(yes, tool_id)?;
+    let tools = select_tools(auto, tool_id)?;
     if tools.is_empty() {
         println!("{} No harness selected.", "!".yellow());
         println!();
@@ -239,7 +240,7 @@ fn run_full_install(
     }
     println!();
 
-    install_skills_step(yes, skill_path)?;
+    install_skills_step(auto, skill_path)?;
 
     // Save config so returning users get the menu
     let existing = user_config::UserConfig::load().unwrap_or_default();
@@ -258,7 +259,7 @@ fn run_full_install(
     print_restart_reminder();
     println!();
 
-    offer_cli_install(yes)?;
+    offer_cli_install(auto)?;
 
     Ok(())
 }
@@ -434,10 +435,10 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     Ok(endpoint)
 }
 
-fn update(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
+fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let tools = select_tools(yes, tool_id)?;
+    let tools = select_tools(auto, tool_id)?;
     for tool in &tools {
         match tool.method {
             InstallMethod::FileEdit(shape) => {
@@ -500,10 +501,10 @@ fn update(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<
     Ok(())
 }
 
-fn uninstall(yes: bool, tool_id: Option<&str>) -> Result<()> {
+fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let tools = select_tools(yes, tool_id)?;
+    let tools = select_tools(auto, tool_id)?;
     for tool in &tools {
         match tool.method {
             InstallMethod::FileEdit(shape) => {
@@ -737,7 +738,7 @@ fn status() -> Result<()> {
     Ok(())
 }
 
-fn select_tools(yes: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
+fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
     // Explicit --tool flag wins.
     if let Some(id) = tool_id {
         let tool = Tool::from_id(id)
@@ -748,7 +749,7 @@ fn select_tools(yes: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
     let detected = Tool::detect_installed();
 
     // -y mode: take all detected, no prompt.
-    if yes {
+    if auto {
         if detected.is_empty() {
             println!(
                 "{} No harnesses detected. Run {} to see available tools.",
@@ -907,7 +908,7 @@ fn install_docker() -> Result<()> {
     Ok(())
 }
 
-fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
+fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
     // If custom skill path provided, use it directly (Directory format assumed)
     if let Some(custom_path) = skill_path {
         let path = std::path::PathBuf::from(custom_path);
@@ -924,7 +925,7 @@ fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let proceed = if yes {
+    let proceed = if auto {
         true
     } else {
         Confirm::new("Also install 21 Engrammic skills?")
@@ -939,7 +940,7 @@ fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
     }
 
     let all_dests = SkillDest::all();
-    let chosen: Vec<&SkillDest> = if yes {
+    let chosen: Vec<&SkillDest> = if auto {
         all_dests.iter().filter(|d| d.default).collect()
     } else {
         let options: Vec<String> = all_dests
@@ -989,7 +990,7 @@ fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn install_skills_only(yes: bool, skill_path: Option<&str>) -> Result<()> {
+fn install_skills_only(auto: bool, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
     println!("{}", "Skills-only install".bold());
@@ -1017,7 +1018,7 @@ fn install_skills_only(yes: bool, skill_path: Option<&str>) -> Result<()> {
     }
 
     let all_dests = SkillDest::all();
-    let chosen: Vec<&SkillDest> = if yes {
+    let chosen: Vec<&SkillDest> = if auto {
         // Auto mode: install to all detected destinations
         all_dests.iter().filter(|d| d.default).collect()
     } else {
@@ -1089,8 +1090,8 @@ fn print_restart_reminder() {
     println!("{}", "────────────────────────────────────────".dimmed());
 }
 
-fn offer_cli_install(yes: bool) -> Result<()> {
-    let install_cli = if yes {
+fn offer_cli_install(auto: bool) -> Result<()> {
+    let install_cli = if auto {
         false
     } else {
         Confirm::new("Install the Engrammic CLI for future updates?")

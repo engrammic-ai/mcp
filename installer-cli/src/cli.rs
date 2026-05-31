@@ -8,9 +8,9 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    /// Accept defaults without prompting
-    #[arg(short = 'y', long = "yes", global = true)]
-    pub yes: bool,
+    /// Interactive mode - prompt for choices instead of auto-detecting
+    #[arg(short = 'i', long = "interactive", global = true)]
+    pub interactive: bool,
 
     /// Specify tool directly (see `harnesses --json` for the full list)
     #[arg(long, global = true)]
