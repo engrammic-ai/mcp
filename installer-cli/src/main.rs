@@ -1,8 +1,9 @@
 mod banner;
 mod cli;
 mod config;
-mod doctor;
+mod deeplink;
 mod docker;
+mod doctor;
 mod license;
 mod scale;
 mod skill_format;
@@ -21,9 +22,15 @@ use inquire::{
 };
 
 use cli::{Cli, Commands};
-use tools::{SkillDest, Tool, CLOUD_ENDPOINT, LOCAL_ENDPOINT};
+use tools::{
+    ConfigShape, DeepLinkKind, InstallMethod, SkillDest, Tool, CLOUD_ENDPOINT, LOCAL_ENDPOINT,
+};
 
-const VIOLET: Color = Color::Rgb { r: 0x7E, g: 0x57, b: 0xC2 };
+const VIOLET: Color = Color::Rgb {
+    r: 0x7E,
+    g: 0x57,
+    b: 0xC2,
+};
 
 fn render_config() -> RenderConfig<'static> {
     RenderConfig::default()
@@ -33,7 +40,11 @@ fn render_config() -> RenderConfig<'static> {
         .with_scroll_down_prefix(Styled::new("▼").with_fg(VIOLET))
         .with_selected_checkbox(Styled::new("■").with_fg(Color::LightGreen))
         .with_unselected_checkbox(Styled::new("□").with_fg(Color::DarkGrey))
-        .with_help_message(StyleSheet::new().with_fg(VIOLET).with_attr(Attributes::ITALIC))
+        .with_help_message(
+            StyleSheet::new()
+                .with_fg(VIOLET)
+                .with_attr(Attributes::ITALIC),
+        )
 }
 
 fn main() -> Result<()> {
@@ -49,17 +60,52 @@ fn main() -> Result<()> {
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
         Commands::License => manage_license(),
+        Commands::List => list(),
+        Commands::Harnesses { .. } => print_harnesses_json(),
     }
 }
 
-fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
+fn list() -> Result<()> {
+    banner::print_banner();
+
+    let detected = Tool::detect_installed();
+    let all = Tool::all();
+
+    println!("{}", "Detected harnesses".bold());
+    println!();
+    for tool in &all {
+        let is_detected = detected.iter().any(|d| d.id == tool.id);
+        let marker = if is_detected {
+            "✓".green()
+        } else {
+            "-".dimmed()
+        };
+        println!("  {} {:<24} ({})", marker, tool.name, tool.id);
+    }
+    println!();
+    println!(
+        "Run {} to configure detected harnesses.",
+        "engrammic install".cyan()
+    );
+    Ok(())
+}
+
+fn handle_returning_user(
+    config: user_config::UserConfig,
+    tool_id: Option<&str>,
+    skill_path: Option<&str>,
+) -> Result<()> {
     let endpoint = config.endpoint.as_deref().unwrap_or(CLOUD_ENDPOINT);
     let is_self_hosted = endpoint == LOCAL_ENDPOINT;
 
     println!("{}", "Current setup".bold());
     println!(
         "  Mode: {}",
-        if is_self_hosted { "Self-hosted".cyan() } else { "Cloud".cyan() }
+        if is_self_hosted {
+            "Self-hosted".cyan()
+        } else {
+            "Cloud".cyan()
+        }
     );
     println!("  Endpoint: {}", endpoint.dimmed());
 
@@ -107,23 +153,7 @@ fn handle_returning_user(config: user_config::UserConfig, tool_id: Option<&str>,
 
             println!("{}", "Configuring harnesses".bold());
             for tool in &tools {
-                let result = config::install(&tool.config_path, endpoint)?;
-                match result {
-                    config::InstallResult::Created => {
-                        println!("  {} {} {}", "✓".green(), tool.name, "(added)".dimmed());
-                    }
-                    config::InstallResult::Updated { old_url } => {
-                        println!(
-                            "  {} {} {}",
-                            "✓".green(),
-                            tool.name,
-                            format!("(updated: {} -> {})", old_url, endpoint).dimmed()
-                        );
-                    }
-                    config::InstallResult::Unchanged => {
-                        println!("  {} {} {}", "-".dimmed(), tool.name, "(unchanged)".dimmed());
-                    }
-                }
+                install_tool(tool, endpoint)?;
             }
             println!();
             println!("{} Done.", "✓".green());
@@ -167,7 +197,9 @@ fn install(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
 
     // Fresh install or -y mode
     let endpoint = if yes {
-        existing_config.endpoint.unwrap_or_else(|| CLOUD_ENDPOINT.to_string())
+        existing_config
+            .endpoint
+            .unwrap_or_else(|| CLOUD_ENDPOINT.to_string())
     } else {
         select_deployment_mode(&existing_config)?
     };
@@ -175,7 +207,12 @@ fn install(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
     run_full_install(endpoint, yes, tool_id, skill_path)
 }
 
-fn run_full_install(endpoint: String, yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
+fn run_full_install(
+    endpoint: String,
+    yes: bool,
+    tool_id: Option<&str>,
+    skill_path: Option<&str>,
+) -> Result<()> {
     let tools = select_tools(yes, tool_id)?;
     if tools.is_empty() {
         println!("{} No harness selected.", "!".yellow());
@@ -197,34 +234,7 @@ fn run_full_install(endpoint: String, yes: bool, tool_id: Option<&str>, skill_pa
     );
     println!();
     for tool in &tools {
-        let result = config::install(&tool.config_path, &endpoint)?;
-        match result {
-            config::InstallResult::Created => {
-                println!(
-                    "  {} {} {}",
-                    "✓".green(),
-                    tool.name,
-                    "(added engrammic)".dimmed()
-                );
-            }
-            config::InstallResult::Updated { old_url } => {
-                println!(
-                    "  {} {} {}",
-                    "✓".green(),
-                    tool.name,
-                    format!("(updated: {} -> {})", old_url, endpoint).dimmed()
-                );
-            }
-            config::InstallResult::Unchanged => {
-                println!(
-                    "  {} {} {}",
-                    "-".dimmed(),
-                    tool.name,
-                    "(already configured)".dimmed()
-                );
-            }
-        }
-        println!("    {}", tool.config_path.display().to_string().dimmed());
+        install_tool(tool, &endpoint)?;
     }
     println!();
 
@@ -302,10 +312,7 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     println!();
     println!("{}", "Checking Docker".bold());
     if !docker::check_docker()? {
-        println!(
-            "{} Docker is not running or not installed.",
-            "✗".red()
-        );
+        println!("{} Docker is not running or not installed.", "✗".red());
         println!(
             "  Install Docker Desktop from {} then try again.",
             "https://docs.docker.com/get-docker/".cyan()
@@ -369,7 +376,10 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     println!(
         "  {} {}",
         "✓".green(),
-        dir.join("docker-compose.yml").display().to_string().dimmed()
+        dir.join("docker-compose.yml")
+            .display()
+            .to_string()
+            .dimmed()
     );
     println!(
         "  {} {}",
@@ -392,13 +402,14 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     );
     println!(
         "  2. Run {} to start services",
-        format!("docker compose -f {} up -d", dir.join("docker-compose.yml").display()).cyan()
+        format!(
+            "docker compose -f {} up -d",
+            dir.join("docker-compose.yml").display()
+        )
+        .cyan()
     );
     println!();
-    println!(
-        "  Harnesses will be configured to use: {}",
-        endpoint.cyan()
-    );
+    println!("  Harnesses will be configured to use: {}", endpoint.cyan());
     println!(
         "  To change later: edit {} or {}",
         user_config::UserConfig::path().display().to_string().cyan(),
@@ -425,12 +436,30 @@ fn update(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<
 
     let tools = select_tools(yes, tool_id)?;
     for tool in &tools {
-        let endpoint = detect_installed_endpoint(&tool.config_path);
-        if let Some(ep) = endpoint {
-            let _ = config::install(&tool.config_path, &ep)?;
-            println!("{} Refreshed engrammic in {}", "✓".green(), tool.name);
-        } else {
-            println!("{} Not installed for {}", "!".yellow(), tool.name);
+        match tool.method {
+            InstallMethod::FileEdit(shape) => {
+                if let Some(ep) = detect_installed_endpoint(tool) {
+                    let _ = config::install(&tool.config_path, &ep, shape)?;
+                    println!("{} Refreshed engrammic in {}", "✓".green(), tool.name);
+                } else {
+                    println!("{} Not installed for {}", "!".yellow(), tool.name);
+                }
+            }
+            InstallMethod::DeepLink(_) => {
+                println!(
+                    "{} {} is managed in-app; re-run {} to re-open the install link",
+                    "-".dimmed(),
+                    tool.name,
+                    "engrammic install".cyan()
+                );
+            }
+            InstallMethod::PrintInstructions(_) => {
+                println!(
+                    "{} {} is GUI-managed; no file to update",
+                    "-".dimmed(),
+                    tool.name
+                );
+            }
         }
     }
 
@@ -439,7 +468,12 @@ fn update(yes: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<
         let path = std::path::PathBuf::from(custom_path);
         let results = skills::install_skills_to_paths(&[path])?;
         for (p, count) in results {
-            println!("{} Refreshed {} skills in {}", "✓".green(), count, p.display());
+            println!(
+                "{} Refreshed {} skills in {}",
+                "✓".green(),
+                count,
+                p.display()
+            );
         }
     } else {
         let dests_with_skills: Vec<SkillDest> = SkillDest::all()
@@ -468,8 +502,27 @@ fn uninstall(yes: bool, tool_id: Option<&str>) -> Result<()> {
 
     let tools = select_tools(yes, tool_id)?;
     for tool in &tools {
-        config::uninstall(&tool.config_path)?;
-        println!("{} Removed engrammic from {}", "✓".green(), tool.name);
+        match tool.method {
+            InstallMethod::FileEdit(shape) => {
+                config::uninstall(&tool.config_path, shape)?;
+                println!("{} Removed engrammic from {}", "✓".green(), tool.name);
+            }
+            InstallMethod::DeepLink(_) => {
+                println!(
+                    "{} {} - remove the 'engrammic' server from the app's MCP settings manually",
+                    "!".yellow(),
+                    tool.name
+                );
+            }
+            InstallMethod::PrintInstructions(hint) => {
+                println!(
+                    "{} {} - remove the 'engrammic' server via {}",
+                    "!".yellow(),
+                    tool.name,
+                    hint
+                );
+            }
+        }
     }
 
     for dest in SkillDest::all() {
@@ -487,10 +540,113 @@ fn uninstall(yes: bool, tool_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn detect_installed_endpoint(config_path: &std::path::Path) -> Option<String> {
-    if config::is_installed(config_path, CLOUD_ENDPOINT) {
+/// Register the engrammic MCP server for one tool, branching on its install method,
+/// and print the outcome.
+fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
+    match tool.method {
+        InstallMethod::FileEdit(shape) => {
+            let result = config::install(&tool.config_path, endpoint, shape)?;
+            match result {
+                config::InstallResult::Created => {
+                    println!(
+                        "  {} {} {}",
+                        "✓".green(),
+                        tool.name,
+                        "(added engrammic)".dimmed()
+                    );
+                }
+                config::InstallResult::Updated { old_url } => {
+                    println!(
+                        "  {} {} {}",
+                        "✓".green(),
+                        tool.name,
+                        format!("(updated: {} -> {})", old_url, endpoint).dimmed()
+                    );
+                }
+                config::InstallResult::Unchanged => {
+                    println!(
+                        "  {} {} {}",
+                        "-".dimmed(),
+                        tool.name,
+                        "(already configured)".dimmed()
+                    );
+                }
+            }
+            println!("    {}", tool.config_path.display().to_string().dimmed());
+        }
+        InstallMethod::DeepLink(DeepLinkKind::VsCode) => {
+            let links = deeplink::vscode_links(endpoint);
+            if deeplink::try_open(&links.uri) {
+                println!(
+                    "  {} {} {}",
+                    "✓".green(),
+                    tool.name,
+                    "(opening VS Code - approve the prompt to add the server)".dimmed()
+                );
+            } else {
+                println!(
+                    "  {} {} {}",
+                    "▸".cyan(),
+                    tool.name,
+                    "(manual step - open this link to add the server)".dimmed()
+                );
+            }
+            println!("    {}", links.redirect.cyan());
+        }
+        InstallMethod::DeepLink(DeepLinkKind::Cursor) => {
+            let links = deeplink::cursor_links(endpoint);
+            if deeplink::try_open(&links.uri) {
+                println!(
+                    "  {} {} {}",
+                    "✓".green(),
+                    tool.name,
+                    "(opening Cursor - approve the prompt to add the server)".dimmed()
+                );
+            } else {
+                println!(
+                    "  {} {} {}",
+                    "▸".cyan(),
+                    tool.name,
+                    "(manual step - open this link to add the server)".dimmed()
+                );
+            }
+            println!("    {}", links.redirect.cyan());
+        }
+        InstallMethod::PrintInstructions(hint) => {
+            let block = serde_json::json!({
+                "mcpServers": {
+                    "engrammic": {
+                        "url": endpoint
+                    }
+                }
+            });
+            println!(
+                "  {} {} {}",
+                "▸".cyan(),
+                tool.name,
+                "(manual step - add via GUI)".dimmed()
+            );
+            println!("    Add via: {}", hint.cyan());
+            println!(
+                "    {}",
+                serde_json::to_string_pretty(&block)
+                    .unwrap_or_default()
+                    .dimmed()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn detect_installed_endpoint(tool: &Tool) -> Option<String> {
+    // Deep-link harnesses (VS Code) manage config through their own UI; we cannot
+    // read back whether the server is registered, so report unknown.
+    let InstallMethod::FileEdit(shape) = tool.method else {
+        return None;
+    };
+    if config::is_installed(&tool.config_path, CLOUD_ENDPOINT, shape) {
         Some(CLOUD_ENDPOINT.to_string())
-    } else if config::is_installed(config_path, LOCAL_ENDPOINT) {
+    } else if config::is_installed(&tool.config_path, LOCAL_ENDPOINT, shape) {
         Some(LOCAL_ENDPOINT.to_string())
     } else {
         None
@@ -505,20 +661,42 @@ fn status() -> Result<()> {
     let mut has_cloud = false;
     let mut has_local = false;
     for tool in Tool::all() {
-        let endpoint = detect_installed_endpoint(&tool.config_path);
-        let label = if let Some(ep) = endpoint {
-            any_installed = true;
-            if ep == CLOUD_ENDPOINT {
-                has_cloud = true;
-                format!("{:<18}", "✓ cloud").green()
-            } else {
-                has_local = true;
-                format!("{:<18}", "✓ self-hosted").green()
+        let present = tool
+            .config_path
+            .parent()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+        let label = match tool.method {
+            // Deep-link harnesses are managed in-app; we can only report presence.
+            InstallMethod::DeepLink(_) => {
+                if present {
+                    format!("{:<18}", "▸ deep-link").cyan()
+                } else {
+                    format!("{:<18}", "- not detected").dimmed()
+                }
             }
-        } else if tool.config_path.parent().map(|p| p.exists()).unwrap_or(false) {
-            format!("{:<18}", "- not configured").dimmed()
-        } else {
-            format!("{:<18}", "- not detected").dimmed()
+            // Print-instructions harnesses are GUI-managed; report marker presence only.
+            InstallMethod::PrintInstructions(_) => {
+                if present {
+                    format!("{:<18}", "▸ manual (GUI)").cyan()
+                } else {
+                    format!("{:<18}", "- not detected").dimmed()
+                }
+            }
+            InstallMethod::FileEdit(_) => match detect_installed_endpoint(&tool) {
+                Some(ep) => {
+                    any_installed = true;
+                    if ep == CLOUD_ENDPOINT {
+                        has_cloud = true;
+                        format!("{:<18}", "✓ cloud").green()
+                    } else {
+                        has_local = true;
+                        format!("{:<18}", "✓ self-hosted").green()
+                    }
+                }
+                None if present => format!("{:<18}", "- not configured").dimmed(),
+                None => format!("{:<18}", "- not detected").dimmed(),
+            },
         };
         println!("  {} {}", label, tool.name);
     }
@@ -530,7 +708,10 @@ fn status() -> Result<()> {
     if has_local {
         println!();
         println!("  Self-hosted endpoint: {}", LOCAL_ENDPOINT.cyan());
-        println!("  To change: edit the {} key in your harness config", "engrammic.url".cyan());
+        println!(
+            "  To change: edit the {} key in your harness config",
+            "engrammic.url".cyan()
+        );
     }
 
     println!();
@@ -556,30 +737,43 @@ fn status() -> Result<()> {
 fn select_tools(yes: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
     // Explicit --tool flag wins.
     if let Some(id) = tool_id {
-        let tool = Tool::from_id(id).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Unknown tool: {}. Use: claude, cursor, windsurf, antigravity, gemini, pi",
-                id
-            )
-        })?;
+        let tool = Tool::from_id(id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}. Use: {}", id, Tool::valid_ids()))?;
         return Ok(vec![tool]);
     }
 
     let detected = Tool::detect_installed();
 
-    // -y with detected harnesses: take all detected, no prompt.
-    if yes && !detected.is_empty() {
+    // -y mode: take all detected, no prompt.
+    if yes {
+        if detected.is_empty() {
+            println!(
+                "{} No harnesses detected. Run {} to see available tools.",
+                "!".yellow(),
+                "engrammic list".cyan()
+            );
+            return Ok(vec![]);
+        }
         for tool in &detected {
             println!("Auto-selected: {}", tool.name.cyan());
         }
         return Ok(detected);
     }
 
+    // Interactive mode: pre-select detected tools.
     let all_tools = Tool::all();
     let options: Vec<&str> = all_tools.iter().map(|t| t.name).collect();
+    let detected_ids: std::collections::HashSet<_> = detected.iter().map(|t| t.id).collect();
+    let defaults: Vec<usize> = all_tools
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| detected_ids.contains(t.id))
+        .map(|(i, _)| i)
+        .collect();
 
     let selection = MultiSelect::new("Select harnesses to configure", options)
-        .with_help_message("↑↓ move · space toggle · enter confirm")
+        .with_default(&defaults)
+        .with_help_message("↑↓ move · space toggle · enter confirm (detected tools pre-selected)")
         .with_render_config(render_config())
         .prompt()?;
 
@@ -597,10 +791,7 @@ fn install_docker() -> Result<()> {
     // Check Docker is available and running.
     println!("{}", "Checking Docker".bold());
     if !docker::check_docker()? {
-        println!(
-            "{} Docker is not running or not installed.",
-            "✗".red()
-        );
+        println!("{} Docker is not running or not installed.", "✗".red());
         println!(
             "  Install Docker Desktop from {} then try again.",
             "https://docs.docker.com/get-docker/".cyan()
@@ -664,7 +855,10 @@ fn install_docker() -> Result<()> {
     println!(
         "  {} {}",
         "✓".green(),
-        dir.join("docker-compose.yml").display().to_string().dimmed()
+        dir.join("docker-compose.yml")
+            .display()
+            .to_string()
+            .dimmed()
     );
     println!(
         "  {} {}",
@@ -694,17 +888,18 @@ fn install_docker() -> Result<()> {
     );
     println!(
         "  2. Run {} to start all services",
-        format!("docker compose -f {} up -d", dir.join("docker-compose.yml").display()).cyan()
+        format!(
+            "docker compose -f {} up -d",
+            dir.join("docker-compose.yml").display()
+        )
+        .cyan()
     );
     println!(
         "  3. MCP endpoint will be available at {}",
         LOCAL_ENDPOINT.cyan()
     );
     println!();
-    println!(
-        "Run {} to configure your harness.",
-        "engrammic".cyan()
-    );
+    println!("Run {} to configure your harness.", "engrammic".cyan());
 
     Ok(())
 }
@@ -755,10 +950,13 @@ fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
             })
             .collect();
 
-        let picked = MultiSelect::new("Install skills to", options.iter().map(|s| s.as_str()).collect())
-            .with_help_message("↑↓ move · space toggle · enter confirm")
-            .with_render_config(render_config())
-            .prompt()?;
+        let picked = MultiSelect::new(
+            "Install skills to",
+            options.iter().map(|s| s.as_str()).collect(),
+        )
+        .with_help_message("↑↓ move · space toggle · enter confirm")
+        .with_render_config(render_config())
+        .prompt()?;
 
         all_dests
             .iter()
@@ -828,10 +1026,7 @@ fn offer_cli_install(yes: bool) -> Result<()> {
     let local_bin_str = local_bin.display().to_string();
     if !path_env.split(':').any(|p| p == local_bin_str) {
         println!();
-        println!(
-            "  {} Add to your shell config:",
-            "!".yellow()
-        );
+        println!("  {} Add to your shell config:", "!".yellow());
         println!(
             "    {}",
             format!("export PATH=\"$HOME/.local/bin:$PATH\"").cyan()
@@ -858,11 +1053,11 @@ fn upgrade_docker() -> Result<()> {
     let dir = user_config::UserConfig::dir();
 
     if config.endpoint.as_deref() != Some(LOCAL_ENDPOINT) {
+        println!("{} No self-hosted installation found.", "!".yellow());
         println!(
-            "{} No self-hosted installation found.",
-            "!".yellow()
+            "  Run {} first to install the Docker stack.",
+            "engrammic docker".cyan()
         );
-        println!("  Run {} first to install the Docker stack.", "engrammic docker".cyan());
         return Ok(());
     }
 
@@ -895,6 +1090,50 @@ fn upgrade_docker() -> Result<()> {
         "✓".green()
     );
 
+    Ok(())
+}
+
+fn print_harnesses_json() -> Result<()> {
+    use serde_json::json;
+    let tools = Tool::all();
+    let entries: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|tool| {
+            let (format, container, method_str) = match tool.method {
+                InstallMethod::FileEdit(shape) => match shape {
+                    ConfigShape::JsonMap { container, .. } => {
+                        ("json", Some(container), "file-edit")
+                    }
+                    ConfigShape::CodexToml => ("toml", Some("mcp_servers"), "file-edit"),
+                    ConfigShape::GooseYaml => ("yaml", Some("extensions"), "file-edit"),
+                    ConfigShape::OpenCodeJson => ("json", Some("mcp"), "file-edit"),
+                    ConfigShape::ContinueYaml => ("yaml", Some("mcpServers"), "file-edit"),
+                },
+                InstallMethod::DeepLink(_) => ("none", None, "deep-link"),
+                InstallMethod::PrintInstructions(_) => ("none", None, "print"),
+            };
+            let config_path_str = tool.config_path.display().to_string();
+            match container {
+                Some(c) => json!({
+                    "id": tool.id,
+                    "name": tool.name,
+                    "config_path": config_path_str,
+                    "format": format,
+                    "container": c,
+                    "method": method_str,
+                }),
+                None => json!({
+                    "id": tool.id,
+                    "name": tool.name,
+                    "config_path": config_path_str,
+                    "format": format,
+                    "container": null,
+                    "method": method_str,
+                }),
+            }
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&entries)?);
     Ok(())
 }
 
@@ -981,7 +1220,11 @@ fn manage_license() -> Result<()> {
     );
     println!(
         "  Run: {}",
-        format!("docker compose -f {}/docker-compose.yml restart", dir.display()).cyan()
+        format!(
+            "docker compose -f {}/docker-compose.yml restart",
+            dir.display()
+        )
+        .cyan()
     );
 
     Ok(())
