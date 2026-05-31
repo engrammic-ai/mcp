@@ -254,6 +254,14 @@ fn run_full_install(
         "remember, recall, learn, believe, trace, link".dimmed()
     );
     println!();
+    println!("{}", "────────────────────────────────────────".dimmed());
+    println!(
+        "{} {}",
+        "⟳".cyan(),
+        "Restart your editor to apply changes.".bold()
+    );
+    println!("{}", "────────────────────────────────────────".dimmed());
+    println!();
 
     offer_cli_install(yes)?;
 

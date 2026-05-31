@@ -106,6 +106,13 @@ const CLINE_JSON: ConfigShape = ConfigShape::JsonMap {
     url_field: "url",
 };
 
+/// Windsurf/Antigravity use `serverUrl` instead of `url`.
+const WINDSURF_JSON: ConfigShape = ConfigShape::JsonMap {
+    container: "mcpServers",
+    type_field: TypeField::None,
+    url_field: "serverUrl",
+};
+
 /// Roo Code uses `mcpServers` with `streamable-http` type.
 const ROO_JSON: ConfigShape = ConfigShape::JsonMap {
     container: "mcpServers",
@@ -122,6 +129,33 @@ pub struct Tool {
     pub method: InstallMethod,
 }
 
+fn claude_desktop_config_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join("Library/Application Support/Claude/claude_desktop_config.json")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join("Claude/claude_desktop_config.json")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(".config/Claude/claude_desktop_config.json")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(".config/Claude/claude_desktop_config.json")
+    }
+}
+
 impl Tool {
     pub fn all() -> Vec<Tool> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
@@ -130,6 +164,12 @@ impl Tool {
                 name: "Claude Code",
                 id: "claude",
                 config_path: home.join(".claude/settings.json"),
+                method: InstallMethod::FileEdit(STANDARD_JSON),
+            },
+            Tool {
+                name: "Claude Desktop",
+                id: "claude-desktop",
+                config_path: claude_desktop_config_path(),
                 method: InstallMethod::FileEdit(STANDARD_JSON),
             },
             Tool {
@@ -142,13 +182,13 @@ impl Tool {
                 name: "Windsurf",
                 id: "windsurf",
                 config_path: home.join(".codeium/windsurf/mcp_config.json"),
-                method: InstallMethod::FileEdit(STANDARD_JSON),
+                method: InstallMethod::FileEdit(WINDSURF_JSON),
             },
             Tool {
                 name: "Antigravity",
                 id: "antigravity",
                 config_path: home.join(".gemini/antigravity/mcp_config.json"),
-                method: InstallMethod::FileEdit(STANDARD_JSON),
+                method: InstallMethod::FileEdit(WINDSURF_JSON),
             },
             Tool {
                 name: "Gemini CLI",
