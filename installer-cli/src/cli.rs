@@ -31,6 +31,8 @@ pub enum Commands {
     Uninstall,
     /// Show installation status
     Status,
+    /// Install skills only (no MCP config changes)
+    Skills,
     /// Install self-hosted Docker stack
     Docker,
     /// Upgrade self-hosted Docker stack to latest version

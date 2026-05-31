@@ -58,12 +58,29 @@ uvx engrammic-mcp install
 ## Usage
 
 ```bash
-# macOS/Linux
-curl -fsSL https://get.engrammic.ai/install.sh | sh
+# Full install (MCP + skills) - macOS/Linux
+curl -fsSL https://get.engrammic.ai | bash
 
-# Windows PowerShell
+# Full install - Windows PowerShell
 irm https://get.engrammic.ai/install.ps1 | iex
+
+# Skills only (no MCP config changes) - macOS/Linux
+curl -fsSL https://get.engrammic.ai/skills | bash
+
+# Skills only - Windows PowerShell
+irm https://get.engrammic.ai/install-skills.ps1 | iex
 
 # Via PyPI
 uvx engrammic-mcp install
 ```
+
+## Endpoints
+
+| Path | Description |
+|------|-------------|
+| `/` | Full installer (MCP + skills) |
+| `/skills` | Skills-only installer |
+| `/install.sh` | Direct link to Unix installer |
+| `/install.ps1` | Direct link to Windows installer |
+| `/install-skills.sh` | Direct link to Unix skills installer |
+| `/install-skills.ps1` | Direct link to Windows skills installer |

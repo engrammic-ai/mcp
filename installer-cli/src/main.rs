@@ -55,6 +55,7 @@ fn main() -> Result<()> {
         Commands::Update => update(cli.yes, cli.tool.as_deref(), cli.skill_path.as_deref()),
         Commands::Uninstall => uninstall(cli.yes, cli.tool.as_deref()),
         Commands::Status => status(),
+        Commands::Skills => install_skills_only(cli.yes, cli.skill_path.as_deref()),
         Commands::Docker => install_docker(),
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
@@ -253,14 +254,8 @@ fn run_full_install(
         "Done. Tools available: {}",
         "remember, recall, learn, believe, trace, link".dimmed()
     );
-    println!();
-    println!("{}", "────────────────────────────────────────".dimmed());
-    println!(
-        "{} {}",
-        "⟳".cyan(),
-        "Restart your editor to apply changes.".bold()
-    );
-    println!("{}", "────────────────────────────────────────".dimmed());
+
+    print_restart_reminder();
     println!();
 
     offer_cli_install(yes)?;
@@ -992,6 +987,106 @@ fn install_skills_step(yes: bool, skill_path: Option<&str>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn install_skills_only(yes: bool, skill_path: Option<&str>) -> Result<()> {
+    banner::print_banner();
+
+    println!("{}", "Skills-only install".bold());
+    println!(
+        "  {}",
+        "This installs skills without modifying MCP config.".dimmed()
+    );
+    println!();
+
+    // If custom skill path provided, use it directly
+    if let Some(custom_path) = skill_path {
+        let path = std::path::PathBuf::from(custom_path);
+        let results = skills::install_skills_to_paths(&[path])?;
+        println!("{}", "Installing skills".bold());
+        for (p, count) in results {
+            println!(
+                "  {} {} skills  {}",
+                "✓".green(),
+                count,
+                p.display().to_string().dimmed()
+            );
+        }
+        print_restart_reminder();
+        return Ok(());
+    }
+
+    let all_dests = SkillDest::all();
+    let chosen: Vec<&SkillDest> = if yes {
+        // Auto mode: install to all detected destinations
+        all_dests.iter().filter(|d| d.default).collect()
+    } else {
+        let options: Vec<String> = all_dests
+            .iter()
+            .map(|d| {
+                let scope = match d.scope {
+                    tools::SkillScope::User => "(user)",
+                    tools::SkillScope::Project => "(project)",
+                };
+                format!("{:<25} {}", d.name, scope.dimmed())
+            })
+            .collect();
+
+        let defaults: Vec<usize> = all_dests
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.default)
+            .map(|(i, _)| i)
+            .collect();
+
+        let picked = MultiSelect::new(
+            "Install skills to",
+            options.iter().map(|s| s.as_str()).collect(),
+        )
+        .with_default(&defaults)
+        .with_help_message("↑↓ move · space toggle · enter confirm (detected tools pre-selected)")
+        .with_render_config(render_config())
+        .prompt()?;
+
+        all_dests
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| picked.contains(&options[*i].as_str()))
+            .map(|(_, d)| d)
+            .collect()
+    };
+
+    if chosen.is_empty() {
+        println!("{} No skill destination selected.", "!".yellow());
+        return Ok(());
+    }
+
+    let dests_vec: Vec<SkillDest> = chosen.into_iter().cloned().collect();
+    let results = skills::install_skills(&dests_vec)?;
+
+    println!("{}", "Installing skills".bold());
+    for (path, count) in results {
+        println!(
+            "  {} {} skills  {}",
+            "✓".green(),
+            count,
+            path.display().to_string().dimmed()
+        );
+    }
+
+    print_restart_reminder();
+    Ok(())
+}
+
+fn print_restart_reminder() {
+    println!();
+    println!("{}", "────────────────────────────────────────".dimmed());
+    println!(
+        "{} {}",
+        "⟳".cyan(),
+        "Restart your editor to apply changes.".bold()
+    );
+    println!("{}", "────────────────────────────────────────".dimmed());
 }
 
 fn offer_cli_install(yes: bool) -> Result<()> {
