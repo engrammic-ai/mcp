@@ -18,7 +18,7 @@ Windows (PowerShell):
 irm https://get.engrammic.ai/install.ps1 | iex
 ```
 
-The installer detects your agent harnesses (Claude Code, Cursor, Codex, Gemini CLI, and more), wires Engrammic in as an MCP server, and optionally installs the Engrammic skills. Run `engrammic-mcp login` to authenticate after installation.
+The installer detects your agent harnesses (Claude Code, Cursor, Codex, GitHub Copilot, Gemini CLI, and more), wires Engrammic in as an MCP server, and optionally installs the Engrammic skills. Run `engrammic-mcp login` to authenticate after installation.
 
 See [Getting Started](docs/GETTING-STARTED.md) after installation.
 

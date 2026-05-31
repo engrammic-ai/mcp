@@ -19,10 +19,7 @@ pub fn count_skills(dest: &Path) -> usize {
     };
     entries
         .flatten()
-        .filter(|e| {
-            e.file_name().to_string_lossy().starts_with(SKILL_PREFIX)
-                && e.path().is_dir()
-        })
+        .filter(|e| e.file_name().to_string_lossy().starts_with(SKILL_PREFIX) && e.path().is_dir())
         .count()
 }
 
@@ -58,22 +55,18 @@ pub fn count_skills_formatted(dest: &SkillDest) -> usize {
     match dest.format {
         SkillFormat::Directory => count_skills(&dest.path),
         SkillFormat::CursorMdc => count_mdc_skills(&dest.path),
-        SkillFormat::GeminiMd => count_gemini_skills(&dest.path),
+        // GeminiMd and AgentsMd are both marker-merged single markdown files.
+        SkillFormat::GeminiMd | SkillFormat::AgentsMd => count_gemini_skills(&dest.path),
     }
 }
 
 pub fn copy_skills(src: &Path, dest: &Path) -> Result<usize> {
-    fs::create_dir_all(dest)
-        .with_context(|| format!("failed to create {}", dest.display()))?;
+    fs::create_dir_all(dest).with_context(|| format!("failed to create {}", dest.display()))?;
     let mut count = 0;
-    for entry in fs::read_dir(src)
-        .with_context(|| format!("failed to read {}", src.display()))?
-    {
+    for entry in fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))? {
         let entry = entry?;
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with(SKILL_PREFIX)
-            || !entry.path().is_dir()
-        {
+        if !name.to_string_lossy().starts_with(SKILL_PREFIX) || !entry.path().is_dir() {
             continue;
         }
         let target = dest.join(&name);
@@ -108,9 +101,7 @@ pub fn remove_skills(dest: &Path) -> Result<usize> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with(SKILL_PREFIX)
-            && entry.path().is_dir()
-        {
+        if name.to_string_lossy().starts_with(SKILL_PREFIX) && entry.path().is_dir() {
             fs::remove_dir_all(entry.path())?;
             count += 1;
         }
@@ -123,7 +114,7 @@ pub fn install_skills_formatted(src: &Path, dest: &SkillDest) -> Result<usize> {
     match dest.format {
         SkillFormat::Directory => copy_skills(src, &dest.path),
         SkillFormat::CursorMdc => copy_skills_as_mdc(src, &dest.path),
-        SkillFormat::GeminiMd => merge_skills_to_gemini(src, &dest.path),
+        SkillFormat::GeminiMd | SkillFormat::AgentsMd => merge_skills_to_gemini(src, &dest.path),
     }
 }
 
@@ -132,9 +123,7 @@ pub fn copy_skills_as_mdc(src: &Path, dest_dir: &Path) -> Result<usize> {
     fs::create_dir_all(dest_dir)
         .with_context(|| format!("failed to create {}", dest_dir.display()))?;
     let mut count = 0;
-    for entry in fs::read_dir(src)
-        .with_context(|| format!("failed to read {}", src.display()))?
-    {
+    for entry in fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))? {
         let entry = entry?;
         let dir_name = entry.file_name();
         let dir_name_str = dir_name.to_string_lossy();
@@ -167,9 +156,7 @@ pub fn merge_skills_to_gemini(src: &Path, dest_file: &Path) -> Result<usize> {
     }
 
     let mut entries: Vec<SkillEntry> = Vec::new();
-    for entry in fs::read_dir(src)
-        .with_context(|| format!("failed to read {}", src.display()))?
-    {
+    for entry in fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))? {
         let entry = entry?;
         let dir_name = entry.file_name();
         let dir_name_str = dir_name.to_string_lossy();
@@ -214,7 +201,7 @@ pub fn remove_skills_formatted(dest: &SkillDest) -> Result<usize> {
     match dest.format {
         SkillFormat::Directory => remove_skills(&dest.path),
         SkillFormat::CursorMdc => remove_mdc_skills(&dest.path),
-        SkillFormat::GeminiMd => remove_gemini_skills(&dest.path),
+        SkillFormat::GeminiMd | SkillFormat::AgentsMd => remove_gemini_skills(&dest.path),
     }
 }
 
@@ -241,14 +228,13 @@ pub fn remove_gemini_skills(file: &Path) -> Result<usize> {
     if !file.exists() {
         return Ok(0);
     }
-    let content = fs::read_to_string(file)
-        .with_context(|| format!("failed to read {}", file.display()))?;
+    let content =
+        fs::read_to_string(file).with_context(|| format!("failed to read {}", file.display()))?;
     let cleaned = remove_from_gemini_md(&content);
     if cleaned == content {
         return Ok(0);
     }
-    fs::write(file, cleaned)
-        .with_context(|| format!("failed to write {}", file.display()))?;
+    fs::write(file, cleaned).with_context(|| format!("failed to write {}", file.display()))?;
     Ok(1)
 }
 
@@ -292,8 +278,7 @@ pub fn download_skills_tarball() -> Result<Vec<u8>> {
 pub fn install_skills(dests: &[SkillDest]) -> Result<Vec<(PathBuf, usize)>> {
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
-        ProgressStyle::with_template("  {spinner} {msg}")
-            .expect("valid spinner template"),
+        ProgressStyle::with_template("  {spinner} {msg}").expect("valid spinner template"),
     );
     spinner.enable_steady_tick(Duration::from_millis(80));
     spinner.set_message("Downloading skills...");
@@ -301,8 +286,7 @@ pub fn install_skills(dests: &[SkillDest]) -> Result<Vec<(PathBuf, usize)>> {
     let bytes = download_skills_tarball()?;
     spinner.finish_and_clear();
 
-    let tmp = std::env::temp_dir()
-        .join(format!("engrammic-skills-unpack-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("engrammic-skills-unpack-{}", std::process::id()));
     if tmp.exists() {
         fs::remove_dir_all(&tmp).ok();
     }
@@ -325,8 +309,7 @@ pub fn install_skills(dests: &[SkillDest]) -> Result<Vec<(PathBuf, usize)>> {
 pub fn install_skills_to_paths(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)>> {
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
-        ProgressStyle::with_template("  {spinner} {msg}")
-            .expect("valid spinner template"),
+        ProgressStyle::with_template("  {spinner} {msg}").expect("valid spinner template"),
     );
     spinner.enable_steady_tick(Duration::from_millis(80));
     spinner.set_message("Downloading skills...");
@@ -334,8 +317,10 @@ pub fn install_skills_to_paths(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)
     let bytes = download_skills_tarball()?;
     spinner.finish_and_clear();
 
-    let tmp = std::env::temp_dir()
-        .join(format!("engrammic-skills-unpack-paths-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!(
+        "engrammic-skills-unpack-paths-{}",
+        std::process::id()
+    ));
     if tmp.exists() {
         fs::remove_dir_all(&tmp).ok();
     }
@@ -424,7 +409,11 @@ mod tests {
     fn count_gemini_skills_returns_one_when_markers_present() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("GEMINI.md");
-        fs::write(&file, "# Rules\n<!-- ENGRAMMIC:START -->\ncontent\n<!-- ENGRAMMIC:END -->\n").unwrap();
+        fs::write(
+            &file,
+            "# Rules\n<!-- ENGRAMMIC:START -->\ncontent\n<!-- ENGRAMMIC:END -->\n",
+        )
+        .unwrap();
         assert_eq!(count_gemini_skills(&file), 1);
     }
 
@@ -438,7 +427,10 @@ mod tests {
 
     #[test]
     fn count_gemini_skills_on_missing_file_is_zero() {
-        assert_eq!(count_gemini_skills(std::path::Path::new("/no/such/GEMINI.md")), 0);
+        assert_eq!(
+            count_gemini_skills(std::path::Path::new("/no/such/GEMINI.md")),
+            0
+        );
     }
 
     // ---- count_skills_formatted ----
@@ -484,7 +476,11 @@ mod tests {
         use crate::tools::{SkillDest, SkillFormat, SkillScope};
         let dir = tempdir().unwrap();
         let file = dir.path().join("GEMINI.md");
-        fs::write(&file, "<!-- ENGRAMMIC:START -->\ncontent\n<!-- ENGRAMMIC:END -->").unwrap();
+        fs::write(
+            &file,
+            "<!-- ENGRAMMIC:START -->\ncontent\n<!-- ENGRAMMIC:END -->",
+        )
+        .unwrap();
         let dest = SkillDest {
             name: "test",
             harness: "test",
@@ -495,6 +491,47 @@ mod tests {
             note: None,
         };
         assert_eq!(count_skills_formatted(&dest), 1);
+    }
+
+    #[test]
+    fn agents_md_dispatch_install_count_remove() {
+        use crate::tools::{SkillDest, SkillFormat, SkillScope};
+        // src tree with one skill
+        let src = tempdir().unwrap();
+        let skill_dir = src.path().join("engrammic-recall");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: recall\ndescription: find things\n---\nBody text.",
+        )
+        .unwrap();
+
+        // dest AGENTS.md with pre-existing user content that must survive
+        let out = tempdir().unwrap();
+        let file = out.path().join("AGENTS.md");
+        fs::write(&file, "# My project rules\nDo the thing.\n").unwrap();
+
+        let dest = SkillDest {
+            name: "test",
+            harness: "agents",
+            path: file.clone(),
+            format: SkillFormat::AgentsMd,
+            default: false,
+            scope: SkillScope::Project,
+            note: None,
+        };
+
+        assert_eq!(install_skills_formatted(src.path(), &dest).unwrap(), 1);
+        let after = fs::read_to_string(&file).unwrap();
+        assert!(after.contains("# My project rules"));
+        assert!(after.contains("<!-- ENGRAMMIC:START -->"));
+        assert_eq!(count_skills_formatted(&dest), 1);
+
+        assert_eq!(remove_skills_formatted(&dest).unwrap(), 1);
+        let cleaned = fs::read_to_string(&file).unwrap();
+        assert!(cleaned.contains("# My project rules"));
+        assert!(!cleaned.contains("<!-- ENGRAMMIC:START -->"));
+        assert_eq!(count_skills_formatted(&dest), 0);
     }
 
     #[test]

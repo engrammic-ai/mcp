@@ -12,7 +12,7 @@ pub struct Cli {
     #[arg(short = 'y', long = "yes", global = true)]
     pub yes: bool,
 
-    /// Specify tool directly (claude, cursor, windsurf, antigravity, gemini, pi)
+    /// Specify tool directly (see `harnesses --json` for the full list)
     #[arg(long, global = true)]
     pub tool: Option<String>,
 
@@ -41,4 +41,13 @@ pub enum Commands {
     Doctor,
     /// View or update license key (self-hosted only)
     License,
+    /// List detected harnesses
+    List,
+    /// Print all harness facts as JSON (consumed by docs drift check)
+    #[command(hide = true)]
+    Harnesses {
+        /// Emit JSON (always JSON; flag accepted for the documented invocation)
+        #[arg(long)]
+        json: bool,
+    },
 }
