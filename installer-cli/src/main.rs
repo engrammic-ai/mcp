@@ -49,7 +49,7 @@ fn render_config() -> RenderConfig<'static> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let auto = !cli.interactive;
+    let auto = cli.yes;
 
     match cli.command.unwrap_or(Commands::Install) {
         Commands::Install => install(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
