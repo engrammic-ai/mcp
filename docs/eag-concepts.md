@@ -40,9 +40,14 @@ EAG (Epistemic Augmented Generation) is a memory model for AI agents. It organiz
 
 ## Tools Mapping
 
-| Tool | Typical Layer |
-|------|---------------|
-| `context_store` | Any layer (specify in call) |
-| `context_recall` | Reads from all layers |
-| `context_link` | Creates cross-layer relationships |
-| `context_crystallize` | Promotes Intelligence to Wisdom |
+| Tool | Layer | Purpose |
+|------|-------|---------|
+| `remember` | Memory | Store observations |
+| `learn` | Knowledge | Store claims with evidence |
+| `believe` | Wisdom | Declare commitments |
+| `recall` | All | Search and retrieve |
+| `link` | All | Create relationships |
+| `trace` | All | Query provenance |
+| `reason` | Intelligence | Record reasoning steps |
+| `hypothesize` | Intelligence | Form tentative beliefs (session-scoped) |
+| `commit` | Wisdom | Promote hypotheses to commitments |
