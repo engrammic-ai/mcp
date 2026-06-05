@@ -33,7 +33,10 @@ pub enum Commands {
     Status,
     /// Install skills only (no MCP config changes)
     Skills,
-    /// Install self-hosted Docker stack
+    /// Guided self-hosted setup wizard
+    Selfhost,
+    /// Install self-hosted Docker stack (legacy, use 'selfhost' instead)
+    #[command(hide = true)]
     Docker,
     /// Upgrade self-hosted Docker stack to latest version
     Upgrade,
@@ -41,6 +44,18 @@ pub enum Commands {
     Scale,
     /// Run diagnostic checks
     Doctor,
+    /// View service logs (self-hosted only)
+    Logs {
+        /// Service name (app, dagster, memgraph, etc.)
+        #[arg(short, long)]
+        service: Option<String>,
+        /// Follow log output
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value = "100")]
+        lines: u32,
+    },
     /// View or update license key (self-hosted only)
     License,
     /// List detected harnesses

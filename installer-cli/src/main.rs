@@ -5,7 +5,9 @@ mod deeplink;
 mod docker;
 mod doctor;
 mod license;
+mod logs;
 mod scale;
+mod selfhost;
 mod skill_format;
 mod skills;
 mod tools;
@@ -57,10 +59,14 @@ fn main() -> Result<()> {
         Commands::Uninstall => uninstall(auto, cli.tool.as_deref()),
         Commands::Status => status(),
         Commands::Skills => install_skills_only(auto, cli.skill_path.as_deref()),
+        Commands::Selfhost => selfhost::run_wizard(),
         Commands::Docker => install_docker(),
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
+        Commands::Logs { service, follow, lines } => {
+            logs::show_logs(service.as_deref(), follow, lines)
+        }
         Commands::License => manage_license(),
         Commands::List => list(),
         Commands::Harnesses { .. } => print_harnesses_json(),
