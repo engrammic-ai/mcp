@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Engrammic MCP settings."""
 
-    backend_url: str = "https://api.engrammic.com"
+    backend_url: str = "https://beta.engrammic.ai/mcp/"
     api_key: str | None = None
     credentials_path: Path = Path.home() / ".engrammic" / "credentials.json"
 

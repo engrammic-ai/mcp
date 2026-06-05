@@ -4,9 +4,10 @@ use clap::{Parser, Subcommand};
 #[command(name = "engrammic")]
 #[command(about = "Engrammic CLI - setup, update, and manage your Engrammic MCP integration")]
 #[command(version)]
+#[command(arg_required_else_help = true)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub command: Commands,
 
     /// Skip prompts and auto-configure detected tools
     #[arg(short = 'y', long = "yes", global = true)]
@@ -23,7 +24,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Install Engrammic MCP (default if no subcommand)
+    /// Interactive setup - configure Engrammic for your editors
     Install,
     /// Update to latest endpoint
     Update,

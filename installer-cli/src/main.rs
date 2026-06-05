@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let auto = cli.yes;
 
-    match cli.command.unwrap_or(Commands::Install) {
+    match cli.command {
         Commands::Install => install(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
         Commands::Update => update(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
         Commands::Uninstall => uninstall(auto, cli.tool.as_deref()),
@@ -153,17 +153,29 @@ fn handle_returning_user(
 
     match choice {
         "Add or update harnesses" => {
-            let tools = select_tools(false, tool_id)?;
-            if tools.is_empty() {
-                println!("{} No harness selected.", "!".yellow());
+            let selection = select_tools(false, tool_id)?;
+
+            // Handle removals first
+            if !selection.to_remove.is_empty() {
+                println!("{}", "Removing from deselected harnesses".bold());
+                for tool in &selection.to_remove {
+                    remove_tool(tool)?;
+                }
+                println!();
+            }
+
+            if selection.to_install.is_empty() && selection.to_remove.is_empty() {
+                println!("{} No changes made.", "!".yellow());
                 return Ok(());
             }
 
-            println!("{}", "Configuring harnesses".bold());
-            for tool in &tools {
-                install_tool(tool, endpoint)?;
+            if !selection.to_install.is_empty() {
+                println!("{}", "Configuring harnesses".bold());
+                for tool in &selection.to_install {
+                    install_tool(tool, endpoint)?;
+                }
+                println!();
             }
-            println!();
             println!("{} Done.", "✓".green());
         }
 
@@ -221,8 +233,9 @@ fn run_full_install(
     tool_id: Option<&str>,
     skill_path: Option<&str>,
 ) -> Result<()> {
-    let tools = select_tools(auto, tool_id)?;
-    if tools.is_empty() {
+    let selection = select_tools(auto, tool_id)?;
+
+    if selection.to_install.is_empty() && selection.to_remove.is_empty() {
         println!("{} No harness selected.", "!".yellow());
         println!();
         println!("Add this to your MCP config manually:");
@@ -235,16 +248,29 @@ fn run_full_install(
         return Ok(());
     }
 
-    println!("{}", "Configuring harnesses".bold());
-    println!(
-        "  {}",
-        "Only the 'engrammic' MCP server entry is modified; other servers are preserved.".dimmed()
-    );
-    println!();
-    for tool in &tools {
-        install_tool(tool, &endpoint)?;
+    // Handle removals first
+    if !selection.to_remove.is_empty() {
+        println!("{}", "Removing from deselected harnesses".bold());
+        for tool in &selection.to_remove {
+            remove_tool(tool)?;
+        }
+        println!();
     }
-    println!();
+
+    // Handle installations
+    if !selection.to_install.is_empty() {
+        println!("{}", "Configuring harnesses".bold());
+        println!(
+            "  {}",
+            "Only the 'engrammic' MCP server entry is modified; other servers are preserved."
+                .dimmed()
+        );
+        println!();
+        for tool in &selection.to_install {
+            install_tool(tool, &endpoint)?;
+        }
+        println!();
+    }
 
     install_skills_step(auto, skill_path)?;
 
@@ -444,8 +470,8 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
 fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let tools = select_tools(auto, tool_id)?;
-    for tool in &tools {
+    let selection = select_tools(auto, tool_id)?;
+    for tool in &selection.to_install {
         match tool.method {
             InstallMethod::FileEdit(shape) => {
                 if let Some(ep) = detect_installed_endpoint(tool) {
@@ -507,32 +533,49 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
     Ok(())
 }
 
+/// Remove engrammic from a single tool's config.
+fn remove_tool(tool: &Tool) -> Result<()> {
+    match tool.method {
+        InstallMethod::FileEdit(shape) => {
+            config::uninstall(&tool.config_path, shape)?;
+            println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
+        }
+        InstallMethod::DeepLink(_) => {
+            println!(
+                "  {} {} - remove via app settings",
+                "!".yellow(),
+                tool.name
+            );
+        }
+        InstallMethod::PrintInstructions(hint) => {
+            println!(
+                "  {} {} - remove via {}",
+                "!".yellow(),
+                tool.name,
+                hint
+            );
+        }
+    }
+    Ok(())
+}
+
 fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let tools = select_tools(auto, tool_id)?;
-    for tool in &tools {
-        match tool.method {
-            InstallMethod::FileEdit(shape) => {
-                config::uninstall(&tool.config_path, shape)?;
-                println!("{} Removed engrammic from {}", "✓".green(), tool.name);
-            }
-            InstallMethod::DeepLink(_) => {
-                println!(
-                    "{} {} - remove the 'engrammic' server from the app's MCP settings manually",
-                    "!".yellow(),
-                    tool.name
-                );
-            }
-            InstallMethod::PrintInstructions(hint) => {
-                println!(
-                    "{} {} - remove the 'engrammic' server via {}",
-                    "!".yellow(),
-                    tool.name,
-                    hint
-                );
-            }
-        }
+    let selection = select_tools(auto, tool_id)?;
+    // For uninstall, we remove everything that was selected
+    let tools_to_remove = if selection.to_install.is_empty() {
+        // Nothing selected means remove all installed
+        Tool::all()
+            .into_iter()
+            .filter(|t| detect_installed_endpoint(t).is_some())
+            .collect::<Vec<_>>()
+    } else {
+        selection.to_install
+    };
+
+    for tool in &tools_to_remove {
+        remove_tool(tool)?;
     }
 
     for dest in SkillDest::all() {
@@ -744,17 +787,33 @@ fn status() -> Result<()> {
     Ok(())
 }
 
-fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
+/// Result of tool selection: tools to install and tools to remove.
+struct ToolSelection {
+    to_install: Vec<Tool>,
+    to_remove: Vec<Tool>,
+}
+
+fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<ToolSelection> {
     // Explicit --tool flag wins.
     if let Some(id) = tool_id {
         let tool = Tool::from_id(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}. Use: {}", id, Tool::valid_ids()))?;
-        return Ok(vec![tool]);
+        return Ok(ToolSelection {
+            to_install: vec![tool],
+            to_remove: vec![],
+        });
     }
 
     let detected = Tool::detect_installed();
 
-    // -y mode: take all detected, no prompt.
+    // Find tools that currently have engrammic installed
+    let installed: Vec<Tool> = Tool::all()
+        .into_iter()
+        .filter(|t| detect_installed_endpoint(t).is_some())
+        .collect();
+    let installed_ids: std::collections::HashSet<_> = installed.iter().map(|t| t.id).collect();
+
+    // -y mode: take all detected, no prompt, no removals.
     if auto {
         if detected.is_empty() {
             println!(
@@ -762,35 +821,55 @@ fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<Vec<Tool>> {
                 "!".yellow(),
                 "engrammic list".cyan()
             );
-            return Ok(vec![]);
+            return Ok(ToolSelection {
+                to_install: vec![],
+                to_remove: vec![],
+            });
         }
         for tool in &detected {
             println!("Auto-selected: {}", tool.name.cyan());
         }
-        return Ok(detected);
+        return Ok(ToolSelection {
+            to_install: detected,
+            to_remove: vec![],
+        });
     }
 
-    // Interactive mode: pre-select detected tools.
+    // Interactive mode: pre-select detected tools AND already-installed tools.
     let all_tools = Tool::all();
     let options: Vec<&str> = all_tools.iter().map(|t| t.name).collect();
     let detected_ids: std::collections::HashSet<_> = detected.iter().map(|t| t.id).collect();
     let defaults: Vec<usize> = all_tools
         .iter()
         .enumerate()
-        .filter(|(_, t)| detected_ids.contains(t.id))
+        .filter(|(_, t)| detected_ids.contains(t.id) || installed_ids.contains(t.id))
         .map(|(i, _)| i)
         .collect();
 
     let selection = MultiSelect::new("Select harnesses to configure", options)
         .with_default(&defaults)
-        .with_help_message("↑↓ move · space toggle · enter confirm (detected tools pre-selected)")
+        .with_help_message("↑↓ move · space toggle · enter confirm (deselect to remove)")
         .with_render_config(render_config())
         .prompt()?;
 
-    Ok(all_tools
+    let selected_names: std::collections::HashSet<_> = selection.into_iter().collect();
+
+    let to_install: Vec<Tool> = all_tools
+        .clone()
         .into_iter()
-        .filter(|t| selection.contains(&t.name))
-        .collect())
+        .filter(|t| selected_names.contains(t.name))
+        .collect();
+
+    // Tools to remove: were installed, but now deselected
+    let to_remove: Vec<Tool> = all_tools
+        .into_iter()
+        .filter(|t| installed_ids.contains(t.id) && !selected_names.contains(t.name))
+        .collect();
+
+    Ok(ToolSelection {
+        to_install,
+        to_remove,
+    })
 }
 
 fn install_docker() -> Result<()> {

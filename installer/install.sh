@@ -50,5 +50,9 @@ fi
 
 chmod +x "$INSTALLER"
 
-# Run installer, passing through all arguments
-exec "$INSTALLER" "$@"
+# Run installer - default to 'install' when invoked via curl pipe
+if [ $# -eq 0 ]; then
+    exec "$INSTALLER" install
+else
+    exec "$INSTALLER" "$@"
+fi
