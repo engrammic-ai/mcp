@@ -435,6 +435,23 @@ fn prompt_postgres_password() -> Result<String> {
 fn write_config_files(config: &SelfHostConfig) -> Result<()> {
     std::fs::create_dir_all(&config.install_dir)?;
 
+    // Check if config files already exist and prompt before overwriting
+    let env_path = config.install_dir.join(".env");
+    let models_path = config.install_dir.join("config/models.yaml");
+    if env_path.exists() || models_path.exists() {
+        let overwrite = Confirm::new("Config files exist. Overwrite?")
+            .with_default(false)
+            .with_render_config(render_config())
+            .prompt()?;
+        if !overwrite {
+            println!(
+                "  Skipping config generation. Edit manually at: {}",
+                config.install_dir.display()
+            );
+            return Ok(());
+        }
+    }
+
     // Generate compose with custom ports
     let compose = generate_compose(config);
     let compose_path = config.install_dir.join("docker-compose.yml");
@@ -581,10 +598,15 @@ engrammic doctor
 
 ## Configuration
 
-Edit `.env` to change settings, then restart:
+- `.env` - environment variables (embeddings, credentials, telemetry)
+- `config/models.yaml` - LLM model configuration for SAGE
+
+Full reference: https://docs.engrammic.ai/docs/reference/configuration
+
+**Note:** Config changes require a service restart:
 
 ```bash
-docker compose down && docker compose up -d
+docker compose restart
 ```
 "#,
         config.port, config.dagster_port, config.port
