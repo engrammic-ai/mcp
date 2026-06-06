@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use inquire::{Confirm, Select, Text};
+use inquire::{Confirm, Text};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -22,16 +22,7 @@ pub struct SelfHostConfig {
     pub port: u16,
     pub dagster_port: u16,
     pub install_dir: PathBuf,
-    pub llm_provider: Option<LlmProvider>,
-    pub telemetry_enabled: bool,
     pub postgres_password: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum LlmProvider {
-    OpenAI { api_key: String, model: String },
-    Anthropic { api_key: String, model: String },
-    VertexAI { project: String, location: String },
 }
 
 pub fn run_wizard() -> Result<()> {
@@ -39,62 +30,36 @@ pub fn run_wizard() -> Result<()> {
 
     // Step 1: Prerequisites
     println!();
-    println!("{}", "Step 1/6: Prerequisites".bold());
+    println!("{}", "Step 1/4: Prerequisites".bold());
     println!();
     check_prerequisites()?;
 
     // Step 2: License
     println!();
-    println!("{}", "Step 2/6: License".bold());
+    println!("{}", "Step 2/4: License".bold());
     println!();
     let license_key = prompt_license()?;
 
     // Step 3: Configuration
     println!();
-    println!("{}", "Step 3/6: Configuration".bold());
+    println!("{}", "Step 3/4: Configuration".bold());
     println!();
     let port = prompt_port()?;
     let dagster_port = prompt_dagster_port(port)?;
     let install_dir = prompt_install_dir()?;
     let postgres_password = prompt_postgres_password()?;
 
-    // Step 4: LLM (optional)
-    println!();
-    println!("{}", "Step 4/6: LLM Provider (optional)".bold());
-    println!(
-        "  {}",
-        "SAGE uses an LLM for synthesis, deduplication, and insight generation.".dimmed()
-    );
-    println!(
-        "  {}",
-        "Without an LLM, Engrammic runs in passive mode (storage + recall only).".dimmed()
-    );
-    println!();
-    let llm_provider = prompt_llm_provider()?;
-
-    // Step 5: Telemetry
-    println!();
-    println!("{}", "Step 5/6: Telemetry".bold());
-    println!();
-    let telemetry_enabled = Confirm::new("Share anonymous usage statistics?")
-        .with_default(true)
-        .with_help_message("Helps improve Engrammic. No content or user data collected.")
-        .with_render_config(render_config())
-        .prompt()?;
-
     let config = SelfHostConfig {
         license_key,
         port,
         dagster_port,
         install_dir,
-        llm_provider,
-        telemetry_enabled,
         postgres_password,
     };
 
-    // Step 6: Install
+    // Step 4: Install
     println!();
-    println!("{}", "Step 6/6: Install".bold());
+    println!("{}", "Step 4/4: Install".bold());
     println!();
     write_config_files(&config)?;
 
@@ -148,9 +113,7 @@ fn print_welcome() {
     println!("    1. Check Docker is running");
     println!("    2. Validate your license");
     println!("    3. Configure ports and storage");
-    println!("    4. Set up LLM integration (optional)");
-    println!("    5. Start the services");
-    println!("    6. Configure your code editor");
+    println!("    4. Start the services and configure your code editor");
     println!();
 }
 
@@ -375,70 +338,6 @@ fn prompt_postgres_password() -> Result<String> {
     Ok(password)
 }
 
-fn prompt_llm_provider() -> Result<Option<LlmProvider>> {
-    let options = vec![
-        "None (passive mode - storage and recall only)",
-        "OpenAI (GPT-4o recommended)",
-        "Anthropic (Claude)",
-        "Google Vertex AI",
-    ];
-
-    let choice = Select::new("LLM provider for SAGE", options)
-        .with_render_config(render_config())
-        .prompt()?;
-
-    match choice {
-        "None (passive mode - storage and recall only)" => Ok(None),
-
-        "OpenAI (GPT-4o recommended)" => {
-            let api_key = Text::new("  OpenAI API key")
-                .with_help_message("sk-...")
-                .with_render_config(render_config())
-                .prompt()?;
-
-            let model = Text::new("  Model")
-                .with_default("gpt-4o-mini")
-                .with_render_config(render_config())
-                .prompt()?;
-
-            Ok(Some(LlmProvider::OpenAI { api_key, model }))
-        }
-
-        "Anthropic (Claude)" => {
-            let api_key = Text::new("  Anthropic API key")
-                .with_help_message("sk-ant-...")
-                .with_render_config(render_config())
-                .prompt()?;
-
-            let model = Text::new("  Model")
-                .with_default("claude-sonnet-4-6-20250514")
-                .with_render_config(render_config())
-                .prompt()?;
-
-            Ok(Some(LlmProvider::Anthropic { api_key, model }))
-        }
-
-        "Google Vertex AI" => {
-            println!(
-                "  {}",
-                "Requires gcloud auth application-default login".dimmed()
-            );
-            let project = Text::new("  GCP Project ID")
-                .with_render_config(render_config())
-                .prompt()?;
-
-            let location = Text::new("  Location")
-                .with_default("us-central1")
-                .with_render_config(render_config())
-                .prompt()?;
-
-            Ok(Some(LlmProvider::VertexAI { project, location }))
-        }
-
-        _ => Ok(None),
-    }
-}
-
 fn write_config_files(config: &SelfHostConfig) -> Result<()> {
     std::fs::create_dir_all(&config.install_dir)?;
 
@@ -484,46 +383,58 @@ fn generate_compose(config: &SelfHostConfig) -> String {
 }
 
 fn generate_env(config: &SelfHostConfig) -> String {
-    let mut env = format!(
+    format!(
         r#"# Engrammic Self-Hosted Configuration
 # Generated by: engrammic selfhost
+#
+# Lines prefixed with '#' are optional/commented out.
+# Uncomment and fill in values to enable those features.
 
 # License
-ENGRAMMIC_LICENSE_KEY={}
+ENGRAMMIC_LICENSE_KEY={license_key}
 
 # Database
-POSTGRES_PASSWORD={}
+POSTGRES_PASSWORD={postgres_password}
 
-# Telemetry
-TELEMETRY_ENABLED={}
+# EMBEDDINGS (required)
+# Set EMBEDDING_MODEL and EMBEDDING_DIMENSIONS to match your chosen provider.
+# Supported: openai (text-embedding-3-small, 1536), vertex_ai (textembedding-gecko, 768),
+#            huggingface (model path, dimensions vary), ollama (model name, dimensions vary)
+EMBEDDING_MODEL=openai/text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
+# OPENAI_API_KEY=your-key        # required for openai embeddings
+# HUGGINGFACE_API_KEY=your-key   # required for huggingface embeddings (if not local)
+
+# INFRASTRUCTURE (defaults work with bundled compose)
+# Override only if you're pointing at external services.
+# QDRANT_HOST=qdrant
+# QDRANT_PORT=6333
+# QDRANT_API_KEY=
+# REDIS_URL=redis://redis:6379
+# MEMGRAPH_HOST=memgraph
+# MEMGRAPH_PORT=7687
+ENGRAMMIC_CONFIG_DIR=/app/config-override
+
+# RERANKING (optional, improves recall quality)
+# Uncomment to enable. Cohere is the recommended provider.
+# RERANKING__ENABLED=true
+# RERANKING__PROVIDER=cohere
+# RERANKING__MODEL=rerank-english-v3.0
+# COHERE_API_KEY=your-key
+
+# LLM CREDENTIALS (configure models in config/models.yaml)
+# Add keys for the providers you want to use for LLM tasks.
+# OPENAI_API_KEY=your-key
+# ANTHROPIC_API_KEY=your-key
+# GEMINI_API_KEY=your-key
+# OLLAMA_BASE_URL=http://localhost:11434
+
+# TELEMETRY
+TELEMETRY__ENABLED=false
 "#,
-        config.license_key,
-        config.postgres_password,
-        config.telemetry_enabled,
-    );
-
-    if let Some(ref provider) = config.llm_provider {
-        env.push_str("\n# LLM Provider\n");
-        match provider {
-            LlmProvider::OpenAI { api_key, model } => {
-                env.push_str(&format!("LLM_PROVIDER=openai\n"));
-                env.push_str(&format!("LLM_API_KEY={}\n", api_key));
-                env.push_str(&format!("LLM_MODEL={}\n", model));
-            }
-            LlmProvider::Anthropic { api_key, model } => {
-                env.push_str(&format!("LLM_PROVIDER=anthropic\n"));
-                env.push_str(&format!("LLM_API_KEY={}\n", api_key));
-                env.push_str(&format!("LLM_MODEL={}\n", model));
-            }
-            LlmProvider::VertexAI { project, location } => {
-                env.push_str(&format!("LLM_PROVIDER=vertex_ai\n"));
-                env.push_str(&format!("VERTEX_PROJECT={}\n", project));
-                env.push_str(&format!("VERTEX_LOCATION={}\n", location));
-            }
-        }
-    }
-
-    env
+        license_key = config.license_key,
+        postgres_password = config.postgres_password,
+    )
 }
 
 fn generate_readme(config: &SelfHostConfig) -> String {
