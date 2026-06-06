@@ -14,8 +14,12 @@ services:
     volumes:
       # Mount gcloud credentials for Vertex AI (optional)
       - ~/.config/gcloud:/mnt/gcloud:ro
+      # Host-editable config overrides (e.g. models.yaml to switch the SAGE LLM).
+      # Files dropped here win over the defaults baked into the image.
+      - ./config:/app/config-override:ro
     environment:
       - ENVIRONMENT=self-hosted
+      - ENGRAMMIC_CONFIG_DIR=/app/config-override
       - MEMGRAPH_HOST=memgraph
       - QDRANT_HOST=qdrant
       - REDIS_HOST=redis
@@ -59,8 +63,10 @@ services:
     volumes:
       # Mount gcloud credentials for Vertex AI (optional)
       - ~/.config/gcloud:/mnt/gcloud:ro
+      - ./config:/app/config-override:ro
     environment:
       - ENVIRONMENT=self-hosted
+      - ENGRAMMIC_CONFIG_DIR=/app/config-override
       - MEMGRAPH_HOST=memgraph
       - QDRANT_HOST=qdrant
       - REDIS_HOST=redis
@@ -89,8 +95,11 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    volumes:
+      - ./config:/app/config-override:ro
     environment:
       - ENVIRONMENT=self-hosted
+      - ENGRAMMIC_CONFIG_DIR=/app/config-override
       - MEMGRAPH_HOST=memgraph
       - QDRANT_HOST=qdrant
       - REDIS_HOST=redis
@@ -124,8 +133,11 @@ services:
     command: ["dagster-daemon", "run"]
     env_file:
       - .env
+    volumes:
+      - ./config:/app/config-override:ro
     environment:
       - ENVIRONMENT=self-hosted
+      - ENGRAMMIC_CONFIG_DIR=/app/config-override
       - DAGSTER_HOME=/app
       - MEMGRAPH_HOST=memgraph
       - QDRANT_HOST=qdrant

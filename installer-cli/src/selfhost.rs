@@ -23,6 +23,9 @@ pub struct SelfHostConfig {
     pub dagster_port: u16,
     pub install_dir: PathBuf,
     pub postgres_password: String,
+    pub embedding_model: String,
+    pub embedding_dimensions: u32,
+    pub embedding_credential: Option<(String, String)>,
 }
 
 pub fn run_wizard() -> Result<()> {
@@ -30,19 +33,25 @@ pub fn run_wizard() -> Result<()> {
 
     // Step 1: Prerequisites
     println!();
-    println!("{}", "Step 1/4: Prerequisites".bold());
+    println!("{}", "Step 1/5: Prerequisites".bold());
     println!();
     check_prerequisites()?;
 
     // Step 2: License
     println!();
-    println!("{}", "Step 2/4: License".bold());
+    println!("{}", "Step 2/5: License".bold());
     println!();
     let license_key = prompt_license()?;
 
-    // Step 3: Configuration
+    // Step 3: Embeddings
     println!();
-    println!("{}", "Step 3/4: Configuration".bold());
+    println!("{}", "Step 3/5: Embeddings".bold());
+    println!();
+    let (embedding_model, embedding_dimensions, embedding_credential) = prompt_embeddings()?;
+
+    // Step 4: Configuration
+    println!();
+    println!("{}", "Step 4/5: Configuration".bold());
     println!();
     let port = prompt_port()?;
     let dagster_port = prompt_dagster_port(port)?;
@@ -55,11 +64,14 @@ pub fn run_wizard() -> Result<()> {
         dagster_port,
         install_dir,
         postgres_password,
+        embedding_model,
+        embedding_dimensions,
+        embedding_credential,
     };
 
-    // Step 4: Install
+    // Step 5: Install
     println!();
-    println!("{}", "Step 4/4: Install".bold());
+    println!("{}", "Step 5/5: Install".bold());
     println!();
     write_config_files(&config)?;
 
@@ -112,8 +124,9 @@ fn print_welcome() {
     println!("  This wizard will:");
     println!("    1. Check Docker is running");
     println!("    2. Validate your license");
-    println!("    3. Configure ports and storage");
-    println!("    4. Start the services and configure your code editor");
+    println!("    3. Configure your embedding model");
+    println!("    4. Configure ports and storage");
+    println!("    5. Start the services and configure your code editor");
     println!();
 }
 
@@ -240,6 +253,87 @@ fn prompt_license() -> Result<String> {
             }
         }
     }
+}
+
+fn known_embedding_dimensions(model: &str) -> Option<u32> {
+    match model {
+        "openai/text-embedding-3-small" => Some(1536),
+        "openai/text-embedding-3-large" => Some(3072),
+        "ollama/nomic-embed-text" => Some(768),
+        "vertex_ai/text-embedding-005" => Some(768),
+        "ollama/all-minilm" => Some(384),
+        _ => None,
+    }
+}
+
+fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
+    let model = Text::new("Embedding model")
+        .with_default("openai/text-embedding-3-small")
+        .with_help_message("Format: provider/model-name  e.g. openai/text-embedding-3-small, ollama/nomic-embed-text")
+        .with_render_config(render_config())
+        .prompt()?;
+
+    let dimensions = if let Some(dims) = known_embedding_dimensions(&model) {
+        println!(
+            "  {} Dimensions: {} (auto-filled)",
+            "✓".green(),
+            dims
+        );
+        dims
+    } else {
+        println!();
+        println!("  Unknown embedding model. Enter dimensions manually.");
+        println!(
+            "  {} Wrong dimensions will corrupt your Qdrant collection.",
+            "WARNING:".yellow().bold()
+        );
+        println!(
+            "           Fixing requires wiping the collection and re-embedding all data."
+        );
+        println!();
+        let dims_str = Text::new("Embedding dimensions")
+            .with_help_message("Check your model's documentation for the correct value")
+            .with_render_config(render_config())
+            .prompt()?;
+        dims_str.parse::<u32>().context("Invalid dimensions - must be a positive integer")?
+    };
+
+    let credential = if model.starts_with("openai/") {
+        let key = Text::new("OPENAI_API_KEY")
+            .with_help_message("Your OpenAI API key (starts with sk-)")
+            .with_render_config(render_config())
+            .prompt()?;
+        Some(("OPENAI_API_KEY".to_string(), key))
+    } else if model.starts_with("ollama/") {
+        let base = Text::new("OLLAMA_API_BASE")
+            .with_default("http://localhost:11434")
+            .with_help_message("URL where your Ollama server is running")
+            .with_render_config(render_config())
+            .prompt()?;
+        Some(("OLLAMA_API_BASE".to_string(), base))
+    } else if model.starts_with("vertex_ai/") {
+        let project = Text::new("VERTEX_PROJECT")
+            .with_help_message("Your Google Cloud project ID")
+            .with_render_config(render_config())
+            .prompt()?;
+        let location = Text::new("VERTEX_LOCATION")
+            .with_default("us-central1")
+            .with_help_message("GCP region for Vertex AI")
+            .with_render_config(render_config())
+            .prompt()?;
+        // Store both as a combined credential by using a separator; generate_env handles this
+        // We encode as "VERTEX_PROJECT\x00VERTEX_LOCATION" so generate_env can split
+        Some(("VERTEX".to_string(), format!("{}\x00{}", project, location)))
+    } else {
+        println!(
+            "  {} Credential for '{}' must be configured manually in .env",
+            "-".dimmed(),
+            model
+        );
+        None
+    };
+
+    Ok((model, dimensions, credential))
 }
 
 fn prompt_port() -> Result<u16> {
@@ -383,6 +477,25 @@ fn generate_compose(config: &SelfHostConfig) -> String {
 }
 
 fn generate_env(config: &SelfHostConfig) -> String {
+    // Build the credential lines for the embedding section
+    let credential_lines = match &config.embedding_credential {
+        Some((var, val)) if var == "VERTEX" => {
+            // Decode the packed VERTEX_PROJECT\x00VERTEX_LOCATION value
+            let parts: Vec<&str> = val.splitn(2, '\x00').collect();
+            let project = parts.first().copied().unwrap_or("");
+            let location = parts.get(1).copied().unwrap_or("us-central1");
+            format!("VERTEX_PROJECT={project}\nVERTEX_LOCATION={location}")
+        }
+        Some((var, val)) => format!("{var}={val}"),
+        None => String::new(),
+    };
+
+    let credential_section = if credential_lines.is_empty() {
+        String::new()
+    } else {
+        format!("{credential_lines}\n")
+    };
+
     format!(
         r#"# Engrammic Self-Hosted Configuration
 # Generated by: engrammic selfhost
@@ -397,14 +510,9 @@ ENGRAMMIC_LICENSE_KEY={license_key}
 POSTGRES_PASSWORD={postgres_password}
 
 # EMBEDDINGS (required)
-# Set EMBEDDING_MODEL and EMBEDDING_DIMENSIONS to match your chosen provider.
-# Supported: openai (text-embedding-3-small, 1536), vertex_ai (textembedding-gecko, 768),
-#            huggingface (model path, dimensions vary), ollama (model name, dimensions vary)
-EMBEDDING_MODEL=openai/text-embedding-3-small
-EMBEDDING_DIMENSIONS=1536
-# OPENAI_API_KEY=your-key        # required for openai embeddings
-# HUGGINGFACE_API_KEY=your-key   # required for huggingface embeddings (if not local)
-
+EMBEDDING_MODEL={embedding_model}
+EMBEDDING_DIMENSIONS={embedding_dimensions}
+{credential_section}
 # INFRASTRUCTURE (defaults work with bundled compose)
 # Override only if you're pointing at external services.
 # QDRANT_HOST=qdrant
@@ -434,6 +542,9 @@ TELEMETRY__ENABLED=false
 "#,
         license_key = config.license_key,
         postgres_password = config.postgres_password,
+        embedding_model = config.embedding_model,
+        embedding_dimensions = config.embedding_dimensions,
+        credential_section = credential_section,
     )
 }
 
