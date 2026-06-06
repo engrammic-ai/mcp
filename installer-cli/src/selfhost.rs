@@ -432,6 +432,8 @@ fn prompt_postgres_password() -> Result<String> {
     Ok(password)
 }
 
+const MODELS_YAML_TEMPLATE: &str = include_str!("../assets/models.yaml");
+
 fn write_config_files(config: &SelfHostConfig) -> Result<()> {
     std::fs::create_dir_all(&config.install_dir)?;
 
@@ -480,6 +482,22 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
         "  {} {}",
         "✓".green(),
         readme_path.display().to_string().dimmed()
+    );
+
+    // models.yaml template
+    let config_dir = config.install_dir.join("config");
+    std::fs::create_dir_all(&config_dir)?;
+    let models_path = config_dir.join("models.yaml");
+    std::fs::write(&models_path, MODELS_YAML_TEMPLATE)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&models_path, std::fs::Permissions::from_mode(0o644))?;
+    }
+    println!(
+        "  {} {}",
+        "✓".green(),
+        models_path.display().to_string().dimmed()
     );
 
     Ok(())
@@ -803,4 +821,53 @@ fn print_quick_reference(config: &SelfHostConfig) {
             .bright_black()
     );
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn models_yaml_template_schema_valid() {
+        let template = include_str!("../assets/models.yaml");
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str(template).expect("assets/models.yaml must be valid YAML");
+
+        let mapping = yaml.as_mapping().expect("assets/models.yaml must be a YAML mapping");
+
+        assert!(
+            mapping.contains_key("default_tier"),
+            "assets/models.yaml missing required key: default_tier"
+        );
+        assert!(
+            mapping.contains_key("tiers"),
+            "assets/models.yaml missing required key: tiers"
+        );
+
+        let tiers = mapping
+            .get("tiers")
+            .and_then(|v| v.as_mapping())
+            .expect("tiers must be a mapping");
+
+        for (tier_name, tier_config) in tiers {
+            // Tiers with all keys commented out parse as null; skip them.
+            if tier_config.is_null() {
+                continue;
+            }
+
+            let config = tier_config
+                .as_mapping()
+                .unwrap_or_else(|| panic!("tier {:?} must be a mapping", tier_name));
+
+            // Only validate keys that are present (template may have commented-out sections).
+            for key in ["reasoning", "fast", "query_expander"] {
+                if let Some(role) = config.get(key) {
+                    assert!(
+                        role.as_mapping().is_some(),
+                        "tier {:?} key '{}' must be a mapping",
+                        tier_name,
+                        key
+                    );
+                }
+            }
+        }
+    }
 }

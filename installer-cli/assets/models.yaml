@@ -1,0 +1,19 @@
+# Self-hosted model configuration
+# See: https://docs.engrammic.ai/docs/reference/config-files
+
+default_tier: self_hosted
+
+tiers:
+  self_hosted:
+    # Uncomment and configure your preferred LLM provider
+    # See https://docs.engrammic.ai/docs/reference/local-models for Ollama setup
+
+    # reasoning:
+    #   provider: openai
+    #   model: gpt-4o
+    # fast:
+    #   provider: openai
+    #   model: gpt-4o-mini
+    # query_expander:
+    #   provider: openai
+    #   model: gpt-4o-mini
