@@ -1,6 +1,6 @@
 [package]
 name = "engrammic"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 description = "Engrammic MCP installer CLI"
 license = "Apache-2.0"
