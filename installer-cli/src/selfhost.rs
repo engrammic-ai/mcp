@@ -233,7 +233,7 @@ fn prompt_license() -> Result<String> {
 
     loop {
         let key = Text::new("License key")
-            .with_help_message("Starts with ENGR_ - get yours at engrammic.ai/self-hosted")
+            .with_help_message("Starts with ENGR_ - request at dev@engrammic.ai")
             .with_render_config(render_config())
             .prompt()?;
 
