@@ -27,27 +27,8 @@ use tools::{
 };
 
 fn main() -> Result<()> {
-    use std::io::IsTerminal;
-
     let cli = Cli::parse();
-
-    // Auto-enable -y mode if stdin isn't a proper interactive terminal.
-    // This handles Windows PowerShell, piped input, and problematic terminal emulators.
-    let auto = if cli.yes {
-        true
-    } else if !std::io::stdin().is_terminal() {
-        eprintln!(
-            "{} Non-interactive terminal detected, using auto-configure mode.",
-            "note:".yellow().bold()
-        );
-        eprintln!(
-            "  To run interactively, use a terminal that supports raw input (iTerm2, Windows Terminal, etc.)."
-        );
-        eprintln!();
-        true
-    } else {
-        false
-    };
+    let auto = cli.yes;
 
     let result = match cli.command {
         Commands::Install => install(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
