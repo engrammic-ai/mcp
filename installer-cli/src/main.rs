@@ -23,6 +23,7 @@ use inquire::{
     ui::{Attributes, Color, RenderConfig, StyleSheet, Styled},
     Confirm, MultiSelect, Select, Text,
 };
+use std::io::IsTerminal;
 
 use cli::{Cli, Commands};
 use tools::{
@@ -52,7 +53,23 @@ fn render_config() -> RenderConfig<'static> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let auto = cli.yes;
+    let auto = cli.yes || !std::io::stdin().is_terminal();
+
+    // Commands that require interactive input
+    let needs_tty = matches!(
+        cli.command,
+        Commands::Install | Commands::Update | Commands::Uninstall | Commands::Selfhost | Commands::Docker
+    );
+
+    if needs_tty && !std::io::stdin().is_terminal() && !cli.yes {
+        eprintln!(
+            "{} Interactive mode requires a terminal.",
+            "error:".red().bold()
+        );
+        eprintln!("  Run with {} to auto-configure detected harnesses.", "-y".cyan());
+        eprintln!("  Or run in an interactive shell (not piped).");
+        std::process::exit(1);
+    }
 
     match cli.command {
         Commands::Install => install(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
