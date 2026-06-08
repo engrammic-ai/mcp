@@ -2,11 +2,12 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use inquire::{Confirm, Text};
-use std::path::PathBuf;
+use inquire::{Confirm, Select, Text};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use crate::cli_install;
 use crate::docker;
 use crate::license;
 use crate::render_config;
@@ -53,9 +54,10 @@ pub fn run_wizard() -> Result<()> {
     println!();
     println!("{}", "Step 4/5: Configuration".bold());
     println!();
-    let port = prompt_port()?;
-    let dagster_port = prompt_dagster_port(port)?;
     let install_dir = prompt_install_dir()?;
+    let existing_ports = read_existing_ports(&install_dir);
+    let port = prompt_port(existing_ports.0)?;
+    let dagster_port = prompt_dagster_port(port, existing_ports.1)?;
     let postgres_password = prompt_postgres_password()?;
 
     let config = SelfHostConfig {
@@ -97,6 +99,8 @@ pub fn run_wizard() -> Result<()> {
     user_config.save()?;
 
     print_quick_reference(&config);
+
+    cli_install::offer_cli_install(false)?;
 
     Ok(())
 }
@@ -255,90 +259,166 @@ fn prompt_license() -> Result<String> {
     }
 }
 
-fn known_embedding_dimensions(model: &str) -> Option<u32> {
-    match model {
-        "openai/text-embedding-3-small" => Some(1536),
-        "openai/text-embedding-3-large" => Some(3072),
-        "ollama/nomic-embed-text" => Some(768),
-        "vertex_ai/text-embedding-005" => Some(768),
-        "ollama/all-minilm" => Some(384),
-        _ => None,
-    }
-}
-
 fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
-    let model = Text::new("Embedding model")
-        .with_default("openai/text-embedding-3-small")
-        .with_help_message("Format: provider/model-name  e.g. openai/text-embedding-3-small, ollama/nomic-embed-text")
+    let providers = vec![
+        "OpenAI (cloud, paid)",
+        "Ollama (local, free)",
+        "Vertex AI (GCP)",
+        "Other (manual config)",
+    ];
+
+    let provider = Select::new("Embedding provider", providers)
+        .with_help_message("Choose where embeddings are computed")
         .with_render_config(render_config())
         .prompt()?;
 
-    let dimensions = if let Some(dims) = known_embedding_dimensions(&model) {
-        println!(
-            "  {} Dimensions: {} (auto-filled)",
-            "✓".green(),
-            dims
-        );
-        dims
-    } else {
-        println!();
-        println!("  Unknown embedding model. Enter dimensions manually.");
-        println!(
-            "  {} Wrong dimensions will corrupt your Qdrant collection.",
-            "WARNING:".yellow().bold()
-        );
-        println!(
-            "           Fixing requires wiping the collection and re-embedding all data."
-        );
-        println!();
-        let dims_str = Text::new("Embedding dimensions")
-            .with_help_message("Check your model's documentation for the correct value")
-            .with_render_config(render_config())
-            .prompt()?;
-        dims_str.parse::<u32>().context("Invalid dimensions - must be a positive integer")?
-    };
+    let (model, dimensions, credential) = match provider {
+        "OpenAI (cloud, paid)" => {
+            let models = vec![
+                "text-embedding-3-small (1536 dims, recommended)",
+                "text-embedding-3-large (3072 dims, higher quality)",
+            ];
+            let model_choice = Select::new("Model", models)
+                .with_render_config(render_config())
+                .prompt()?;
 
-    let credential = if model.starts_with("openai/") {
-        let key = Text::new("OPENAI_API_KEY")
-            .with_help_message("Your OpenAI API key (starts with sk-)")
-            .with_render_config(render_config())
-            .prompt()?;
-        Some(("OPENAI_API_KEY".to_string(), key))
-    } else if model.starts_with("ollama/") {
-        let base = Text::new("OLLAMA_API_BASE")
-            .with_default("http://localhost:11434")
-            .with_help_message("URL where your Ollama server is running")
-            .with_render_config(render_config())
-            .prompt()?;
-        Some(("OLLAMA_API_BASE".to_string(), base))
-    } else if model.starts_with("vertex_ai/") {
-        let project = Text::new("VERTEX_PROJECT")
-            .with_help_message("Your Google Cloud project ID")
-            .with_render_config(render_config())
-            .prompt()?;
-        let location = Text::new("VERTEX_LOCATION")
-            .with_default("us-central1")
-            .with_help_message("GCP region for Vertex AI")
-            .with_render_config(render_config())
-            .prompt()?;
-        // Store both as a combined credential by using a separator; generate_env handles this
-        // We encode as "VERTEX_PROJECT\x00VERTEX_LOCATION" so generate_env can split
-        Some(("VERTEX".to_string(), format!("{}\x00{}", project, location)))
-    } else {
-        println!(
-            "  {} Credential for '{}' must be configured manually in .env",
-            "-".dimmed(),
-            model
-        );
-        None
+            let (model, dims) = if model_choice.starts_with("text-embedding-3-small") {
+                ("openai/text-embedding-3-small", 1536)
+            } else {
+                ("openai/text-embedding-3-large", 3072)
+            };
+
+            println!("  {} Dimensions: {} (auto-filled)", "✓".green(), dims);
+
+            let key = Text::new("OPENAI_API_KEY")
+                .with_help_message("Your OpenAI API key (starts with sk-)")
+                .with_render_config(render_config())
+                .prompt()?;
+
+            (model.to_string(), dims, Some(("OPENAI_API_KEY".to_string(), key)))
+        }
+        "Ollama (local, free)" => {
+            let models = vec![
+                "nomic-embed-text (768 dims, recommended)",
+                "all-minilm (384 dims, smaller)",
+                "Other (enter manually)",
+            ];
+            let model_choice = Select::new("Model", models)
+                .with_help_message("Make sure this model is pulled in Ollama")
+                .with_render_config(render_config())
+                .prompt()?;
+
+            let (model, dims) = if model_choice.starts_with("nomic-embed-text") {
+                ("ollama/nomic-embed-text".to_string(), 768u32)
+            } else if model_choice.starts_with("all-minilm") {
+                ("ollama/all-minilm".to_string(), 384)
+            } else {
+                let name = Text::new("Model name")
+                    .with_help_message("Just the model name, e.g. mxbai-embed-large")
+                    .with_render_config(render_config())
+                    .prompt()?;
+                let dims = prompt_dimensions()?;
+                (format!("ollama/{}", name), dims)
+            };
+
+            println!("  {} Dimensions: {}", "✓".green(), dims);
+
+            let base = Text::new("OLLAMA_API_BASE")
+                .with_default("http://localhost:11434")
+                .with_help_message("URL where your Ollama server is running")
+                .with_render_config(render_config())
+                .prompt()?;
+
+            (model, dims, Some(("OLLAMA_API_BASE".to_string(), base)))
+        }
+        "Vertex AI (GCP)" => {
+            let model = "vertex_ai/text-embedding-005";
+            let dims = 768;
+
+            println!("  {} Model: {}", "✓".green(), model);
+            println!("  {} Dimensions: {}", "✓".green(), dims);
+
+            let project = Text::new("VERTEX_PROJECT")
+                .with_help_message("Your Google Cloud project ID")
+                .with_render_config(render_config())
+                .prompt()?;
+            let location = Text::new("VERTEX_LOCATION")
+                .with_default("us-central1")
+                .with_help_message("GCP region for Vertex AI")
+                .with_render_config(render_config())
+                .prompt()?;
+
+            (
+                model.to_string(),
+                dims,
+                Some(("VERTEX".to_string(), format!("{}\x00{}", project, location))),
+            )
+        }
+        _ => {
+            let model = Text::new("Embedding model")
+                .with_help_message("Format: provider/model-name")
+                .with_render_config(render_config())
+                .prompt()?;
+
+            let dims = prompt_dimensions()?;
+
+            println!(
+                "  {} Configure credentials manually in .env after setup",
+                "!".yellow()
+            );
+
+            (model, dims, None)
+        }
     };
 
     Ok((model, dimensions, credential))
 }
 
-fn prompt_port() -> Result<u16> {
+fn prompt_dimensions() -> Result<u32> {
+    println!();
+    println!(
+        "  {} Wrong dimensions will corrupt your Qdrant collection.",
+        "WARNING:".yellow().bold()
+    );
+    println!("           Fixing requires wiping and re-embedding all data.");
+    println!();
+    let dims_str = Text::new("Embedding dimensions")
+        .with_help_message("Check your model's documentation for the correct value")
+        .with_render_config(render_config())
+        .prompt()?;
+    dims_str.parse::<u32>().context("Invalid dimensions - must be a positive integer")
+}
+
+fn read_existing_ports(install_dir: &Path) -> (Option<u16>, Option<u16>) {
+    let compose_path = install_dir.join("docker-compose.yml");
+    let Ok(content) = std::fs::read_to_string(&compose_path) else {
+        return (None, None);
+    };
+
+    let mut app_port = None;
+    let mut dagster_port = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Look for port mappings like '- "9000:8000"' or '- "3001:3000"'
+        if trimmed.starts_with("- \"") && trimmed.contains(":8000\"") {
+            if let Some(port_str) = trimmed.strip_prefix("- \"").and_then(|s| s.split(':').next()) {
+                app_port = port_str.parse().ok();
+            }
+        } else if trimmed.starts_with("- \"") && trimmed.contains(":3000\"") {
+            if let Some(port_str) = trimmed.strip_prefix("- \"").and_then(|s| s.split(':').next()) {
+                dagster_port = port_str.parse().ok();
+            }
+        }
+    }
+
+    (app_port, dagster_port)
+}
+
+fn prompt_port(existing: Option<u16>) -> Result<u16> {
+    let default = existing.unwrap_or(DEFAULT_PORT);
     let port_str = Text::new("MCP server port")
-        .with_default(&DEFAULT_PORT.to_string())
+        .with_default(&default.to_string())
         .with_help_message("Your editor will connect to this port")
         .with_render_config(render_config())
         .prompt()?;
@@ -359,19 +439,21 @@ fn prompt_port() -> Result<u16> {
             .with_render_config(render_config())
             .prompt()?;
         if !proceed {
-            return prompt_port(); // Recurse to try again
+            return prompt_port(existing);
         }
     }
 
     Ok(port)
 }
 
-fn prompt_dagster_port(mcp_port: u16) -> Result<u16> {
-    let default = if mcp_port == DEFAULT_PORT {
-        DEFAULT_DAGSTER_PORT
-    } else {
-        mcp_port + 1000 // Offset from MCP port
-    };
+fn prompt_dagster_port(mcp_port: u16, existing: Option<u16>) -> Result<u16> {
+    let default = existing.unwrap_or_else(|| {
+        if mcp_port == DEFAULT_PORT {
+            DEFAULT_DAGSTER_PORT
+        } else {
+            mcp_port + 1000
+        }
+    });
 
     let port_str = Text::new("Dagster UI port (SAGE pipeline dashboard)")
         .with_default(&default.to_string())

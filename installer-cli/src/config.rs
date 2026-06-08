@@ -44,17 +44,17 @@ pub fn uninstall(config_path: &Path, shape: ConfigShape) -> Result<()> {
     }
 }
 
-pub fn is_installed(config_path: &Path, endpoint: &str, shape: ConfigShape) -> bool {
+pub fn get_installed_endpoint(config_path: &Path, shape: ConfigShape) -> Option<String> {
     match shape {
         ConfigShape::JsonMap {
             container,
             url_field,
             ..
-        } => is_installed_json_map(config_path, endpoint, container, url_field),
-        ConfigShape::CodexToml => is_installed_toml(config_path, endpoint),
-        ConfigShape::GooseYaml => is_installed_goose_yaml(config_path, endpoint),
-        ConfigShape::OpenCodeJson => is_installed_json_map(config_path, endpoint, "mcp", "url"),
-        ConfigShape::ContinueYaml => is_installed_continue_yaml(config_path, endpoint),
+        } => get_endpoint_json_map(config_path, container, url_field),
+        ConfigShape::CodexToml => get_endpoint_toml(config_path),
+        ConfigShape::GooseYaml => get_endpoint_goose_yaml(config_path),
+        ConfigShape::OpenCodeJson => get_endpoint_json_map(config_path, "mcp", "url"),
+        ConfigShape::ContinueYaml => get_endpoint_continue_yaml(config_path),
     }
 }
 
@@ -151,22 +151,13 @@ fn uninstall_json_map(config_path: &Path, container: &str) -> Result<()> {
     write_json(config_path, &root)
 }
 
-fn is_installed_json_map(
-    config_path: &Path,
-    endpoint: &str,
-    container: &str,
-    url_field: &str,
-) -> bool {
-    let Ok(root) = read_json(config_path) else {
-        return false;
-    };
-
-    root.get(container)
-        .and_then(|v| v.get(MCP_SERVER_KEY))
-        .and_then(|v| v.get(url_field))
-        .and_then(|v| v.as_str())
-        .map(|url| url == endpoint)
-        .unwrap_or(false)
+fn get_endpoint_json_map(config_path: &Path, container: &str, url_field: &str) -> Option<String> {
+    let root = read_json(config_path).ok()?;
+    root.get(container)?
+        .get(MCP_SERVER_KEY)?
+        .get(url_field)?
+        .as_str()
+        .map(String::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -252,16 +243,13 @@ fn uninstall_toml(config_path: &Path) -> Result<()> {
     write_toml_doc(config_path, &doc)
 }
 
-fn is_installed_toml(config_path: &Path, endpoint: &str) -> bool {
-    let Ok(doc) = read_toml_doc(config_path) else {
-        return false;
-    };
-    doc.get(CODEX_SERVER_TABLE)
-        .and_then(|i| i.get(MCP_SERVER_KEY))
-        .and_then(|i| i.get("url"))
-        .and_then(|i| i.as_str())
-        .map(|url| url == endpoint)
-        .unwrap_or(false)
+fn get_endpoint_toml(config_path: &Path) -> Option<String> {
+    let doc = read_toml_doc(config_path).ok()?;
+    doc.get(CODEX_SERVER_TABLE)?
+        .get(MCP_SERVER_KEY)?
+        .get("url")?
+        .as_str()
+        .map(String::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -387,19 +375,16 @@ fn uninstall_goose_yaml(config_path: &Path) -> Result<()> {
     write_yaml(config_path, &root)
 }
 
-fn is_installed_goose_yaml(config_path: &Path, endpoint: &str) -> bool {
-    let Ok(root) = read_yaml(config_path) else {
-        return false;
-    };
-    root.as_mapping()
-        .and_then(|m| m.get(YamlValue::String("extensions".to_string())))
-        .and_then(|v| v.as_mapping())
-        .and_then(|m| m.get(YamlValue::String(MCP_SERVER_KEY.to_string())))
-        .and_then(|v| v.as_mapping())
-        .and_then(|m| m.get(YamlValue::String("uri".to_string())))
-        .and_then(|v| v.as_str())
-        .map(|uri| uri == endpoint)
-        .unwrap_or(false)
+fn get_endpoint_goose_yaml(config_path: &Path) -> Option<String> {
+    let root = read_yaml(config_path).ok()?;
+    root.as_mapping()?
+        .get(YamlValue::String("extensions".to_string()))?
+        .as_mapping()?
+        .get(YamlValue::String(MCP_SERVER_KEY.to_string()))?
+        .as_mapping()?
+        .get(YamlValue::String("uri".to_string()))?
+        .as_str()
+        .map(String::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -544,37 +529,27 @@ fn uninstall_continue_yaml(config_path: &Path) -> Result<()> {
     write_yaml(config_path, &root)
 }
 
-fn is_installed_continue_yaml(config_path: &Path, endpoint: &str) -> bool {
-    let Ok(root) = read_yaml(config_path) else {
-        return false;
-    };
-    root.as_mapping()
-        .and_then(|m| m.get(YamlValue::String("mcpServers".to_string())))
-        .and_then(|v| v.as_sequence())
-        .map(|servers| {
-            servers.iter().any(|item| {
-                item.as_mapping()
-                    .and_then(|m| {
-                        let name = m
-                            .get(YamlValue::String("name".to_string()))
-                            .and_then(|v| v.as_str())
-                            .map(|n| n == MCP_SERVER_KEY)
-                            .unwrap_or(false);
-                        let url = m
-                            .get(YamlValue::String("url".to_string()))
-                            .and_then(|v| v.as_str())
-                            .map(|u| u == endpoint)
-                            .unwrap_or(false);
-                        if name && url {
-                            Some(true)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
+fn get_endpoint_continue_yaml(config_path: &Path) -> Option<String> {
+    let root = read_yaml(config_path).ok()?;
+    let servers = root
+        .as_mapping()?
+        .get(YamlValue::String("mcpServers".to_string()))?
+        .as_sequence()?;
+    for item in servers {
+        let m = item.as_mapping()?;
+        let is_engrammic = m
+            .get(YamlValue::String("name".to_string()))
+            .and_then(|v| v.as_str())
+            .map(|n| n == MCP_SERVER_KEY)
+            .unwrap_or(false);
+        if is_engrammic {
+            return m
+                .get(YamlValue::String("url".to_string()))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -589,6 +564,12 @@ mod tests {
     };
     const EP: &str = "https://beta.engrammic.ai/mcp/";
     const EP2: &str = "http://localhost:8000/mcp";
+
+    fn is_installed(config_path: &Path, endpoint: &str, shape: ConfigShape) -> bool {
+        get_installed_endpoint(config_path, shape)
+            .map(|ep| ep == endpoint)
+            .unwrap_or(false)
+    }
 
     // --- JSON map (regression for the original behavior) ---
 
