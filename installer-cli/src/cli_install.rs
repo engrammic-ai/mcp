@@ -2,19 +2,17 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use inquire::Confirm;
-
-use crate::render_config;
+use dialoguer::Confirm;
 
 pub fn offer_cli_install(auto: bool) -> Result<()> {
     let install_cli = if auto {
         false
     } else {
-        Confirm::new("Install the Engrammic CLI for future updates?")
-            .with_default(true)
-            .with_help_message("Allows running 'engrammic update', 'engrammic status', etc.")
-            .with_render_config(render_config())
-            .prompt()?
+        println!("  {}", "(Allows running 'engrammic update', 'engrammic status', etc.)".dimmed());
+        Confirm::new()
+            .with_prompt("Install the Engrammic CLI for future updates?")
+            .default(true)
+            .interact()?
     };
 
     if !install_cli {

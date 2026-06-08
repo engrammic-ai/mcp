@@ -160,15 +160,28 @@ fn check_oom_events() -> Result<Vec<String>> {
 }
 
 fn check_license() -> Result<u32> {
-    let env_content = std::fs::read_to_string(".env")?;
-    for line in env_content.lines() {
-        if line.starts_with("ENGRAMMIC_LICENSE_KEY=") {
-            let key = line.trim_start_matches("ENGRAMMIC_LICENSE_KEY=");
-            let info = crate::license::validate_license_format(key)?;
-            return Ok(info.days_remaining);
+    // First try user config (preferred)
+    let user_config = crate::user_config::UserConfig::load()?;
+    if let Some(key) = &user_config.license_key {
+        let info = crate::license::validate_license_format(key)?;
+        return Ok(info.days_remaining);
+    }
+
+    // Fall back to .env in selfhost_dir
+    if let Some(dir) = &user_config.selfhost_dir {
+        let env_path = dir.join(".env");
+        if let Ok(env_content) = std::fs::read_to_string(&env_path) {
+            for line in env_content.lines() {
+                if line.starts_with("ENGRAMMIC_LICENSE_KEY=") {
+                    let key = line.trim_start_matches("ENGRAMMIC_LICENSE_KEY=");
+                    let info = crate::license::validate_license_format(key)?;
+                    return Ok(info.days_remaining);
+                }
+            }
         }
     }
-    anyhow::bail!("License key not found in .env")
+
+    anyhow::bail!("License key not found in config or selfhost .env")
 }
 
 fn check_telemetry_endpoint() -> bool {

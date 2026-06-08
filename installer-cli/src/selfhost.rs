@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use inquire::{Confirm, Select, Text};
+use dialoguer::{Confirm, Input, Select};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -10,7 +10,6 @@ use std::time::Duration;
 use crate::cli_install;
 use crate::docker;
 use crate::license;
-use crate::render_config;
 use crate::tools::Tool;
 use crate::user_config::UserConfig;
 
@@ -79,10 +78,10 @@ pub fn run_wizard() -> Result<()> {
 
     // Offer to start
     println!();
-    let start_now = Confirm::new("Start Engrammic now?")
-        .with_default(true)
-        .with_render_config(render_config())
-        .prompt()?;
+    let start_now = Confirm::new()
+        .with_prompt("Start Engrammic now?")
+        .default(true)
+        .interact()?;
 
     if start_now {
         start_and_wait(&config)?;
@@ -95,6 +94,7 @@ pub fn run_wizard() -> Result<()> {
     let user_config = UserConfig {
         endpoint: Some(format!("http://localhost:{}/mcp", config.port)),
         license_key: Some(config.license_key.clone()),
+        selfhost_dir: Some(config.install_dir.clone()),
     };
     user_config.save()?;
 
@@ -225,10 +225,10 @@ fn prompt_license() -> Result<String> {
                 info.customer.cyan(),
                 info.days_remaining
             );
-            let keep = Confirm::new("  Use this license?")
-                .with_default(true)
-                .with_render_config(render_config())
-                .prompt()?;
+            let keep = Confirm::new()
+                .with_prompt("  Use this license?")
+                .default(true)
+                .interact()?;
             if keep {
                 return Ok(key.clone());
             }
@@ -236,10 +236,10 @@ fn prompt_license() -> Result<String> {
     }
 
     loop {
-        let key = Text::new("License key")
-            .with_help_message("Starts with ENGR_ - request at dev@engrammic.ai")
-            .with_render_config(render_config())
-            .prompt()?;
+        println!("  {}", "(Starts with ENGR_ - request at dev@engrammic.ai)".dimmed());
+        let key: String = Input::new()
+            .with_prompt("License key (input visible)")
+            .interact_text()?;
 
         match license::validate_license_format(&key) {
             Ok(info) => {
@@ -267,10 +267,13 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
         "Other (manual config)",
     ];
 
-    let provider = Select::new("Embedding provider", providers)
-        .with_help_message("Choose where embeddings are computed")
-        .with_render_config(render_config())
-        .prompt()?;
+    println!("  {}", "(Choose where embeddings are computed)".dimmed());
+    let idx = Select::new()
+        .with_prompt("Embedding provider")
+        .items(&providers)
+        .default(0)
+        .interact()?;
+    let provider = providers[idx];
 
     let (model, dimensions, credential) = match provider {
         "OpenAI (cloud, paid)" => {
@@ -278,9 +281,12 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
                 "text-embedding-3-small (1536 dims, recommended)",
                 "text-embedding-3-large (3072 dims, higher quality)",
             ];
-            let model_choice = Select::new("Model", models)
-                .with_render_config(render_config())
-                .prompt()?;
+            let model_idx = Select::new()
+                .with_prompt("Model")
+                .items(&models)
+                .default(0)
+                .interact()?;
+            let model_choice = models[model_idx];
 
             let (model, dims) = if model_choice.starts_with("text-embedding-3-small") {
                 ("openai/text-embedding-3-small", 1536)
@@ -290,10 +296,10 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
 
             println!("  {} Dimensions: {} (auto-filled)", "✓".green(), dims);
 
-            let key = Text::new("OPENAI_API_KEY")
-                .with_help_message("Your OpenAI API key (starts with sk-)")
-                .with_render_config(render_config())
-                .prompt()?;
+            println!("  {}", "(Your OpenAI API key (starts with sk-))".dimmed());
+            let key: String = Input::new()
+                .with_prompt("OPENAI_API_KEY")
+                .interact_text()?;
 
             (model.to_string(), dims, Some(("OPENAI_API_KEY".to_string(), key)))
         }
@@ -303,31 +309,34 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
                 "all-minilm (384 dims, smaller)",
                 "Other (enter manually)",
             ];
-            let model_choice = Select::new("Model", models)
-                .with_help_message("Make sure this model is pulled in Ollama")
-                .with_render_config(render_config())
-                .prompt()?;
+            println!("  {}", "(Make sure this model is pulled in Ollama)".dimmed());
+            let model_idx = Select::new()
+                .with_prompt("Model")
+                .items(&models)
+                .default(0)
+                .interact()?;
+            let model_choice = models[model_idx];
 
             let (model, dims) = if model_choice.starts_with("nomic-embed-text") {
                 ("ollama/nomic-embed-text".to_string(), 768u32)
             } else if model_choice.starts_with("all-minilm") {
                 ("ollama/all-minilm".to_string(), 384)
             } else {
-                let name = Text::new("Model name")
-                    .with_help_message("Just the model name, e.g. mxbai-embed-large")
-                    .with_render_config(render_config())
-                    .prompt()?;
+                println!("  {}", "(Just the model name, e.g. mxbai-embed-large)".dimmed());
+                let name: String = Input::new()
+                    .with_prompt("Model name")
+                    .interact_text()?;
                 let dims = prompt_dimensions()?;
                 (format!("ollama/{}", name), dims)
             };
 
             println!("  {} Dimensions: {}", "✓".green(), dims);
 
-            let base = Text::new("OLLAMA_API_BASE")
-                .with_default("http://localhost:11434")
-                .with_help_message("URL where your Ollama server is running")
-                .with_render_config(render_config())
-                .prompt()?;
+            println!("  {}", "(URL where your Ollama server is running)".dimmed());
+            let base: String = Input::new()
+                .with_prompt("OLLAMA_API_BASE")
+                .default("http://localhost:11434".into())
+                .interact_text()?;
 
             (model, dims, Some(("OLLAMA_API_BASE".to_string(), base)))
         }
@@ -338,15 +347,15 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
             println!("  {} Model: {}", "✓".green(), model);
             println!("  {} Dimensions: {}", "✓".green(), dims);
 
-            let project = Text::new("VERTEX_PROJECT")
-                .with_help_message("Your Google Cloud project ID")
-                .with_render_config(render_config())
-                .prompt()?;
-            let location = Text::new("VERTEX_LOCATION")
-                .with_default("us-central1")
-                .with_help_message("GCP region for Vertex AI")
-                .with_render_config(render_config())
-                .prompt()?;
+            println!("  {}", "(Your Google Cloud project ID)".dimmed());
+            let project: String = Input::new()
+                .with_prompt("VERTEX_PROJECT")
+                .interact_text()?;
+            println!("  {}", "(GCP region for Vertex AI)".dimmed());
+            let location: String = Input::new()
+                .with_prompt("VERTEX_LOCATION")
+                .default("us-central1".into())
+                .interact_text()?;
 
             (
                 model.to_string(),
@@ -355,10 +364,10 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
             )
         }
         _ => {
-            let model = Text::new("Embedding model")
-                .with_help_message("Format: provider/model-name")
-                .with_render_config(render_config())
-                .prompt()?;
+            println!("  {}", "(Format: provider/model-name)".dimmed());
+            let model: String = Input::new()
+                .with_prompt("Embedding model")
+                .interact_text()?;
 
             let dims = prompt_dimensions()?;
 
@@ -382,10 +391,10 @@ fn prompt_dimensions() -> Result<u32> {
     );
     println!("           Fixing requires wiping and re-embedding all data.");
     println!();
-    let dims_str = Text::new("Embedding dimensions")
-        .with_help_message("Check your model's documentation for the correct value")
-        .with_render_config(render_config())
-        .prompt()?;
+    println!("  {}", "(Check your model's documentation for the correct value)".dimmed());
+    let dims_str: String = Input::new()
+        .with_prompt("Embedding dimensions")
+        .interact_text()?;
     dims_str.parse::<u32>().context("Invalid dimensions - must be a positive integer")
 }
 
@@ -417,11 +426,11 @@ fn read_existing_ports(install_dir: &Path) -> (Option<u16>, Option<u16>) {
 
 fn prompt_port(existing: Option<u16>) -> Result<u16> {
     let default = existing.unwrap_or(DEFAULT_PORT);
-    let port_str = Text::new("MCP server port")
-        .with_default(&default.to_string())
-        .with_help_message("Your editor will connect to this port")
-        .with_render_config(render_config())
-        .prompt()?;
+    println!("  {}", "(Your editor will connect to this port)".dimmed());
+    let port_str: String = Input::new()
+        .with_prompt("MCP server port")
+        .default(default.to_string())
+        .interact_text()?;
 
     let port: u16 = port_str
         .parse()
@@ -434,10 +443,10 @@ fn prompt_port(existing: Option<u16>) -> Result<u16> {
             "!".yellow(),
             port
         );
-        let proceed = Confirm::new("  Continue anyway?")
-            .with_default(false)
-            .with_render_config(render_config())
-            .prompt()?;
+        let proceed = Confirm::new()
+            .with_prompt("  Continue anyway?")
+            .default(false)
+            .interact()?;
         if !proceed {
             return prompt_port(existing);
         }
@@ -455,11 +464,11 @@ fn prompt_dagster_port(mcp_port: u16, existing: Option<u16>) -> Result<u16> {
         }
     });
 
-    let port_str = Text::new("Dagster UI port (SAGE pipeline dashboard)")
-        .with_default(&default.to_string())
-        .with_help_message("Optional - for monitoring SAGE jobs")
-        .with_render_config(render_config())
-        .prompt()?;
+    println!("  {}", "(Optional - for monitoring SAGE jobs)".dimmed());
+    let port_str: String = Input::new()
+        .with_prompt("Dagster UI port (SAGE pipeline dashboard)")
+        .default(default.to_string())
+        .interact_text()?;
 
     port_str.parse().context("Invalid port number")
 }
@@ -472,11 +481,11 @@ fn prompt_install_dir() -> Result<PathBuf> {
     let default = UserConfig::dir();
     let default_str = default.display().to_string();
 
-    let dir_str = Text::new("Install directory")
-        .with_default(&default_str)
-        .with_help_message("docker-compose.yml and .env will be created here")
-        .with_render_config(render_config())
-        .prompt()?;
+    println!("  {}", "(docker-compose.yml and .env will be created here)".dimmed());
+    let dir_str: String = Input::new()
+        .with_prompt("Install directory")
+        .default(default_str)
+        .interact_text()?;
 
     let path = PathBuf::from(dir_str);
 
@@ -485,10 +494,10 @@ fn prompt_install_dir() -> Result<PathBuf> {
             "  {} Existing installation found",
             "!".yellow()
         );
-        let overwrite = Confirm::new("  Overwrite?")
-            .with_default(false)
-            .with_render_config(render_config())
-            .prompt()?;
+        let overwrite = Confirm::new()
+            .with_prompt("  Overwrite?")
+            .default(false)
+            .interact()?;
         if !overwrite {
             anyhow::bail!("Cancelled - existing installation preserved");
         }
@@ -498,11 +507,11 @@ fn prompt_install_dir() -> Result<PathBuf> {
 }
 
 fn prompt_postgres_password() -> Result<String> {
-    let password = Text::new("PostgreSQL password")
-        .with_default("engrammic")
-        .with_help_message("For local dev the default is fine; use a strong password in production")
-        .with_render_config(render_config())
-        .prompt()?;
+    println!("  {}", "(For local dev the default is fine; use a strong password in production)".dimmed());
+    let password: String = Input::new()
+        .with_prompt("PostgreSQL password")
+        .default("engrammic".into())
+        .interact_text()?;
 
     if password == "engrammic" || password.len() < 8 {
         println!(
@@ -523,10 +532,10 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
     let env_path = config.install_dir.join(".env");
     let models_path = config.install_dir.join("config/models.yaml");
     if env_path.exists() || models_path.exists() {
-        let overwrite = Confirm::new("Config files exist. Overwrite?")
-            .with_default(false)
-            .with_render_config(render_config())
-            .prompt()?;
+        let overwrite = Confirm::new()
+            .with_prompt("Config files exist. Overwrite?")
+            .default(false)
+            .interact()?;
         if !overwrite {
             println!(
                 "  Skipping config generation. Edit manually at: {}",

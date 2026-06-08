@@ -2,10 +2,9 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use inquire::Select;
+use dialoguer::Select;
 use std::process::Command;
 
-use crate::render_config;
 use crate::user_config::UserConfig;
 
 const SERVICES: &[&str] = &[
@@ -41,10 +40,12 @@ pub fn show_logs(service: Option<&str>, follow: bool, lines: u32) -> Result<()> 
                 .chain(SERVICES.iter().copied())
                 .collect();
 
-            Select::new("Which service?", options)
-                .with_render_config(render_config())
-                .prompt()?
-                .to_string()
+            let idx = Select::new()
+                .with_prompt("Which service?")
+                .items(&options)
+                .default(0)
+                .interact()?;
+            options[idx].to_string()
         }
     };
 

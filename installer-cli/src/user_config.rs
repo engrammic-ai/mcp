@@ -9,6 +9,8 @@ pub struct UserConfig {
     pub endpoint: Option<String>,
     #[serde(default)]
     pub license_key: Option<String>,
+    #[serde(default)]
+    pub selfhost_dir: Option<PathBuf>,
 }
 
 impl UserConfig {
