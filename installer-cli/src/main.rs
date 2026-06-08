@@ -472,6 +472,16 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
     banner::print_banner();
 
     let selection = select_tools(auto, tool_id)?;
+
+    // Remove deselected harnesses
+    if !selection.to_remove.is_empty() {
+        println!("{}", "Removing from deselected harnesses".bold());
+        for tool in &selection.to_remove {
+            remove_tool(tool)?;
+        }
+        println!();
+    }
+
     for tool in &selection.to_install {
         match tool.method {
             InstallMethod::FileEdit(shape) => {
