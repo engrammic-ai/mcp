@@ -16,8 +16,55 @@ use crate::user_config::UserConfig;
 const DEFAULT_PORT: u16 = 8000;
 const DEFAULT_DAGSTER_PORT: u16 = 3000;
 
+/// Hardware tier for standalone deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// 8GB RAM - phi4-mini, no reranker
+    Lite,
+    /// 24-32GB RAM - gemma4:12b + bge-reranker
+    Standard,
+    /// 48-64GB RAM - gemma4:26b + jina-reranker
+    Pro,
+    /// Cloud APIs - no local models
+    Cloud,
+}
+
+impl Tier {
+    pub fn ram_requirement(&self) -> &'static str {
+        match self {
+            Tier::Lite => "8GB",
+            Tier::Standard => "24-32GB",
+            Tier::Pro => "48-64GB",
+            Tier::Cloud => "any",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Tier::Lite => "phi4-mini, no reranker",
+            Tier::Standard => "gemma4:12b + bge-reranker",
+            Tier::Pro => "gemma4:26b + jina-reranker",
+            Tier::Cloud => "use cloud APIs (OpenAI, Anthropic, etc.)",
+        }
+    }
+
+    pub fn ollama_model(&self) -> Option<&'static str> {
+        match self {
+            Tier::Lite => Some("phi4-mini"),
+            Tier::Standard => Some("gemma4:12b"),
+            Tier::Pro => Some("gemma4:26b"),
+            Tier::Cloud => None,
+        }
+    }
+
+    pub fn is_standalone(&self) -> bool {
+        !matches!(self, Tier::Cloud)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SelfHostConfig {
+    pub tier: Tier,
     pub license_key: String,
     pub port: u16,
     pub dagster_port: u16,
@@ -31,27 +78,49 @@ pub struct SelfHostConfig {
 pub fn run_wizard() -> Result<()> {
     print_welcome();
 
-    // Step 1: Prerequisites
+    // Step 1: Hardware Profile (Tier Selection)
     println!();
-    println!("{}", "Step 1/5: Prerequisites".bold());
+    println!("{}", "Step 1/6: Hardware Profile".bold());
+    println!();
+    let tier = prompt_tier()?;
+
+    // Step 2: Prerequisites
+    println!();
+    println!("{}", "Step 2/6: Prerequisites".bold());
     println!();
     check_prerequisites()?;
 
-    // Step 2: License
+    // Step 3: License
     println!();
-    println!("{}", "Step 2/5: License".bold());
+    println!("{}", "Step 3/6: License".bold());
     println!();
     let license_key = prompt_license()?;
 
-    // Step 3: Embeddings
-    println!();
-    println!("{}", "Step 3/5: Embeddings".bold());
-    println!();
-    let (embedding_model, embedding_dimensions, embedding_credential) = prompt_embeddings()?;
+    // Step 4: Embeddings (skip for standalone tiers - they use TEI)
+    let (embedding_model, embedding_dimensions, embedding_credential) = if tier.is_standalone() {
+        println!();
+        println!("{}", "Step 4/6: Embeddings".bold());
+        println!();
+        println!(
+            "  {} Using TEI with nomic-embed (768 dims) - bundled with {} tier",
+            "✓".green(),
+            format!("{:?}", tier).to_lowercase()
+        );
+        (
+            "tei/nomic-ai/nomic-embed-text-v1.5".to_string(),
+            768,
+            None,
+        )
+    } else {
+        println!();
+        println!("{}", "Step 4/6: Embeddings".bold());
+        println!();
+        prompt_embeddings()?
+    };
 
-    // Step 4: Configuration
+    // Step 5: Configuration
     println!();
-    println!("{}", "Step 4/5: Configuration".bold());
+    println!("{}", "Step 5/6: Configuration".bold());
     println!();
     let install_dir = prompt_install_dir()?;
     let existing_ports = read_existing_ports(&install_dir);
@@ -60,6 +129,7 @@ pub fn run_wizard() -> Result<()> {
     let postgres_password = prompt_postgres_password()?;
 
     let config = SelfHostConfig {
+        tier,
         license_key,
         port,
         dagster_port,
@@ -70,11 +140,16 @@ pub fn run_wizard() -> Result<()> {
         embedding_credential,
     };
 
-    // Step 5: Install
+    // Step 6: Install
     println!();
-    println!("{}", "Step 5/5: Install".bold());
+    println!("{}", "Step 6/6: Install".bold());
     println!();
     write_config_files(&config)?;
+
+    // Model download for standalone tiers
+    if tier.is_standalone() {
+        download_models(&config)?;
+    }
 
     // Offer to start
     println!();
@@ -126,11 +201,12 @@ fn print_welcome() {
     );
     println!();
     println!("  This wizard will:");
-    println!("    1. Check Docker is running");
-    println!("    2. Validate your license");
-    println!("    3. Configure your embedding model");
-    println!("    4. Configure ports and storage");
-    println!("    5. Start the services and configure your code editor");
+    println!("    1. Select hardware tier (Lite/Standard/Pro/Cloud)");
+    println!("    2. Check Docker is running");
+    println!("    3. Validate your license");
+    println!("    4. Configure embeddings (auto for standalone tiers)");
+    println!("    5. Configure ports and storage");
+    println!("    6. Download models and start services");
     println!();
 }
 
@@ -215,6 +291,139 @@ fn get_available_memory_gb() -> f64 {
     8.0 // fallback assumption
 }
 
+fn prompt_tier() -> Result<Tier> {
+    let ram = get_available_memory_gb();
+
+    // Recommend tier based on available RAM
+    let recommended = if ram >= 48.0 {
+        0 // Pro
+    } else if ram >= 24.0 {
+        1 // Standard
+    } else if ram >= 8.0 {
+        2 // Lite
+    } else {
+        3 // Cloud
+    };
+
+    println!("  Your system: {:.1} GB RAM detected", ram);
+    println!();
+
+    let tiers = vec![
+        format!(
+            "Pro      (48GB+) - gemma4:26b + jina-reranker{}",
+            if recommended == 0 { " (Recommended)" } else { "" }
+        ),
+        format!(
+            "Standard (24GB)  - gemma4:12b + bge-reranker{}",
+            if recommended == 1 { " (Recommended)" } else { "" }
+        ),
+        format!(
+            "Lite     (8GB)   - phi4-mini, no reranker{}",
+            if recommended == 2 { " (Recommended)" } else { "" }
+        ),
+        format!(
+            "Cloud    (any)   - use cloud APIs{}",
+            if recommended == 3 { " (Recommended)" } else { "" }
+        ),
+    ];
+
+    println!("  {}", "(Standalone tiers run models locally with Ollama + TEI)".dimmed());
+    let idx = Select::new()
+        .with_prompt("Select tier based on available RAM")
+        .items(&tiers)
+        .default(recommended)
+        .interact()?;
+
+    let tier = match idx {
+        0 => Tier::Pro,
+        1 => Tier::Standard,
+        2 => Tier::Lite,
+        _ => Tier::Cloud,
+    };
+
+    println!(
+        "  {} Selected: {:?} ({})",
+        "✓".green(),
+        tier,
+        tier.description()
+    );
+
+    Ok(tier)
+}
+
+fn download_models(config: &SelfHostConfig) -> Result<()> {
+    let Some(model) = config.tier.ollama_model() else {
+        return Ok(());
+    };
+
+    println!();
+    println!("{}", "Downloading Ollama model".bold());
+    println!(
+        "  {} This may take several minutes on first run...",
+        "!".yellow()
+    );
+    println!();
+
+    let compose_path = config.install_dir.join("docker-compose.yml");
+
+    // Start just ollama service
+    println!("  Starting Ollama container...");
+    let start = Command::new("docker")
+        .args([
+            "compose",
+            "-f",
+            compose_path.to_str().unwrap(),
+            "up",
+            "-d",
+            "ollama",
+        ])
+        .current_dir(&config.install_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+
+    if !start.success() {
+        println!("  {} Failed to start Ollama container", "!".yellow());
+        println!("  Model will be downloaded when you run 'docker compose up'");
+        return Ok(());
+    }
+
+    // Wait for ollama to be ready
+    println!("  Waiting for Ollama to be ready...");
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_secs(2));
+        let check = Command::new("docker")
+            .args(["exec", "engrammic-ollama", "ollama", "list"])
+            .output();
+        if let Ok(output) = check {
+            if output.status.success() {
+                break;
+            }
+        }
+    }
+
+    // Pull the model
+    println!("  Pulling {}...", model.cyan());
+    let pull = Command::new("docker")
+        .args(["exec", "engrammic-ollama", "ollama", "pull", model])
+        .status();
+
+    match pull {
+        Ok(status) if status.success() => {
+            println!("  {} Model {} downloaded", "✓".green(), model);
+        }
+        _ => {
+            println!(
+                "  {} Model download may still be in progress",
+                "!".yellow()
+            );
+            println!("  Check with: docker exec engrammic-ollama ollama list");
+        }
+    }
+
+    Ok(())
+}
+
 fn prompt_license() -> Result<String> {
     let existing = UserConfig::load().ok().and_then(|c| c.license_key);
 
@@ -236,7 +445,7 @@ fn prompt_license() -> Result<String> {
     }
 
     loop {
-        println!("  {}", "(Starts with ENGR_ - request at dev@engrammic.ai)".dimmed());
+        println!("  {}", "(Starts with ENGR_ - request at founders@engrammic.ai)".dimmed());
         let key: String = Input::new()
             .with_prompt("License key (input visible)")
             .interact_text()?;
@@ -595,11 +804,28 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
 }
 
 fn generate_compose(config: &SelfHostConfig) -> String {
-    // Replace ports in the template
-    let template = docker::COMPOSE_TEMPLATE;
-    template
+    // Select template based on tier
+    let template = match config.tier {
+        Tier::Lite => docker::COMPOSE_LITE,
+        Tier::Standard => docker::COMPOSE_STANDARD,
+        Tier::Pro => docker::COMPOSE_PRO,
+        Tier::Cloud => docker::COMPOSE_TEMPLATE,
+    };
+
+    // Replace ports and env file references
+    let mut compose = template
         .replace("- \"8000:8000\"", &format!("- \"{}:8000\"", config.port))
-        .replace("- \"3000:3000\"", &format!("- \"{}:3000\"", config.dagster_port))
+        .replace("- \"3000:3000\"", &format!("- \"{}:3000\"", config.dagster_port));
+
+    // For standalone tiers, replace env_file reference with just .env
+    if config.tier.is_standalone() {
+        compose = compose
+            .replace("standalone-lite.env", ".env")
+            .replace("standalone-standard.env", ".env")
+            .replace("standalone-pro.env", ".env");
+    }
+
+    compose
 }
 
 fn generate_env(config: &SelfHostConfig) -> String {

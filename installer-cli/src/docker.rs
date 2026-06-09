@@ -58,8 +58,11 @@ pub fn upgrade_docker_stack(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Docker compose template (embedded at compile time).
+/// Docker compose templates (embedded at compile time).
 pub const COMPOSE_TEMPLATE: &str = include_str!("../assets/docker-compose.yml");
+pub const COMPOSE_LITE: &str = include_str!("../assets/docker-compose.lite.yml");
+pub const COMPOSE_STANDARD: &str = include_str!("../assets/docker-compose.standard.yml");
+pub const COMPOSE_PRO: &str = include_str!("../assets/docker-compose.pro.yml");
 pub const README_TEMPLATE: &str = include_str!("../assets/README.md");
 
 /// Write compose file and .env to target directory.
