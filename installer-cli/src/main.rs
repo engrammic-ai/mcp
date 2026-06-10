@@ -493,8 +493,12 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
         match tool.method {
             InstallMethod::FileEdit(shape) => {
                 if let Some(ep) = detect_installed_endpoint(tool) {
+                    let backup = config::ensure_backup(&tool.config_path)?;
                     let _ = config::install(&tool.config_path, &ep, shape)?;
                     println!("{} Refreshed engrammic in {}", "✓".green(), tool.name);
+                    let mut m = manifest::Manifest::load_or_migrate(None)?;
+                    m.record_harness(tool.id, &tool.config_path, backup, &ep);
+                    m.save()?;
                 } else {
                     println!("{} Not installed for {}", "!".yellow(), tool.name);
                 }
@@ -545,6 +549,16 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
                     path.display()
                 );
             }
+            let mut m = manifest::Manifest::load_or_migrate(None)?;
+            for dest in &dests_with_skills {
+                m.record_skill(
+                    dest.harness,
+                    &dest.path,
+                    manifest::skill_format_str(dest.format),
+                    manifest::skill_scope_str(dest.scope),
+                );
+            }
+            m.save()?;
         }
     }
 
@@ -557,6 +571,9 @@ fn remove_tool(tool: &Tool) -> Result<()> {
         InstallMethod::FileEdit(shape) => {
             config::uninstall(&tool.config_path, shape)?;
             println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
+            let mut m = manifest::Manifest::load_or_migrate(None)?;
+            m.forget_harness(tool.id);
+            m.save()?;
         }
         InstallMethod::DeepLink(_) => {
             println!(
@@ -596,6 +613,7 @@ fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
         remove_tool(tool)?;
     }
 
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
     for dest in SkillDest::all() {
         let removed = skills::remove_skills_formatted(&dest)?;
         if removed > 0 {
@@ -605,8 +623,10 @@ fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
                 removed,
                 dest.path.display()
             );
+            m.forget_skill(&dest.path);
         }
     }
+    m.save()?;
 
     Ok(())
 }
@@ -616,6 +636,7 @@ fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
 fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
     match tool.method {
         InstallMethod::FileEdit(shape) => {
+            let backup = config::ensure_backup(&tool.config_path)?;
             let result = config::install(&tool.config_path, endpoint, shape)?;
             match result {
                 config::InstallResult::Created => {
@@ -644,6 +665,9 @@ fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
                 }
             }
             println!("    {}", tool.config_path.display().to_string().dimmed());
+            let mut m = manifest::Manifest::load_or_migrate(None)?;
+            m.record_harness(tool.id, &tool.config_path, backup, endpoint);
+            m.save()?;
         }
         InstallMethod::DeepLink(DeepLinkKind::VsCode) => {
             let links = deeplink::vscode_links(endpoint);
@@ -1089,6 +1113,16 @@ fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
             path.display().to_string().dimmed()
         );
     }
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
+    for dest in &dests_vec {
+        m.record_skill(
+            dest.harness,
+            &dest.path,
+            manifest::skill_format_str(dest.format),
+            manifest::skill_scope_str(dest.scope),
+        );
+    }
+    m.save()?;
     Ok(())
 }
 
@@ -1176,6 +1210,16 @@ fn install_skills_only(auto: bool, skill_path: Option<&str>) -> Result<()> {
         );
     }
 
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
+    for dest in &dests_vec {
+        m.record_skill(
+            dest.harness,
+            &dest.path,
+            manifest::skill_format_str(dest.format),
+            manifest::skill_scope_str(dest.scope),
+        );
+    }
+    m.save()?;
     print_restart_reminder();
     Ok(())
 }

@@ -118,6 +118,50 @@ impl Manifest {
         }
     }
 
+    /// Upsert a harness entry. An existing backup_path is preserved when the
+    /// caller passes None (backups are created once, on first mutation).
+    pub fn record_harness(
+        &mut self,
+        tool_id: &str,
+        config_path: &Path,
+        backup_path: Option<PathBuf>,
+        endpoint: &str,
+    ) {
+        if let Some(e) = self.harnesses.iter_mut().find(|e| e.tool_id == tool_id) {
+            e.config_path = config_path.to_path_buf();
+            e.endpoint = endpoint.to_string();
+            if backup_path.is_some() {
+                e.backup_path = backup_path;
+            }
+        } else {
+            self.harnesses.push(HarnessEntry {
+                tool_id: tool_id.to_string(),
+                config_path: config_path.to_path_buf(),
+                backup_path,
+                endpoint: endpoint.to_string(),
+            });
+        }
+    }
+
+    pub fn forget_harness(&mut self, tool_id: &str) {
+        self.harnesses.retain(|e| e.tool_id != tool_id);
+    }
+
+    pub fn record_skill(&mut self, harness: &str, path: &Path, format: &str, scope: &str) {
+        if !self.skills.iter().any(|s| s.path == path) {
+            self.skills.push(SkillEntry {
+                harness: harness.to_string(),
+                path: path.to_path_buf(),
+                format: format.to_string(),
+                scope: scope.to_string(),
+            });
+        }
+    }
+
+    pub fn forget_skill(&mut self, path: &Path) {
+        self.skills.retain(|s| s.path != path);
+    }
+
     pub fn load_or_migrate_in(dir: &Path) -> Result<Self> {
         if Self::path_in(dir).exists() {
             return Self::load_in(dir);
@@ -149,6 +193,22 @@ impl Manifest {
         };
         manifest.save_in(dir)?;
         Ok(manifest)
+    }
+}
+
+pub fn skill_format_str(f: crate::tools::SkillFormat) -> &'static str {
+    match f {
+        crate::tools::SkillFormat::Directory => "directory",
+        crate::tools::SkillFormat::CursorMdc => "cursor-mdc",
+        crate::tools::SkillFormat::GeminiMd => "gemini-md",
+        crate::tools::SkillFormat::AgentsMd => "agents-md",
+    }
+}
+
+pub fn skill_scope_str(s: crate::tools::SkillScope) -> &'static str {
+    match s {
+        crate::tools::SkillScope::User => "user",
+        crate::tools::SkillScope::Project => "project",
     }
 }
 
@@ -255,5 +315,25 @@ mod tests {
         let m = Manifest::load_or_migrate_in(dir.path()).unwrap();
         assert!(m.endpoint.is_none());
         assert!(!dir.path().join("state.toml").exists());
+    }
+
+    #[test]
+    fn record_harness_upserts_by_tool_id() {
+        let mut m = Manifest::default();
+        m.record_harness("cursor", Path::new("/tmp/a.json"), None, "http://e1");
+        m.record_harness("cursor", Path::new("/tmp/a.json"), Some(PathBuf::from("/tmp/a.json.engrammic.bak")), "http://e2");
+        assert_eq!(m.harnesses.len(), 1);
+        assert_eq!(m.harnesses[0].endpoint, "http://e2");
+        assert!(m.harnesses[0].backup_path.is_some(), "backup path must not be lost on upsert");
+        m.forget_harness("cursor");
+        assert!(m.harnesses.is_empty());
+    }
+
+    #[test]
+    fn record_skill_upserts_by_path() {
+        let mut m = Manifest::default();
+        m.record_skill("claude", Path::new("/tmp/skills"), "directory", "user");
+        m.record_skill("claude", Path::new("/tmp/skills"), "directory", "user");
+        assert_eq!(m.skills.len(), 1);
     }
 }
