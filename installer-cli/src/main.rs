@@ -203,13 +203,34 @@ fn handle_returning_user(
                 return Ok(());
             }
 
+            // Plan recap + gate before any mutation, same contract as the
+            // fresh-install flow (removals here are destructive).
+            let answers = flow::Answers {
+                endpoint: endpoint.to_string(),
+                to_install: selection.to_install,
+                to_remove: selection.to_remove,
+                skill_dests: vec![],
+            };
+            println!();
+            print!("{}", flow::render_plan(&answers, None));
+            println!();
+            let proceed = Confirm::new()
+                .with_prompt("Proceed?")
+                .default(true)
+                .interact()?;
+            if !proceed {
+                println!("{}", "Nothing was changed.".dimmed());
+                return Ok(());
+            }
+            println!();
+
             // One manifest load for all mutations in this flow.
             let mut m = manifest::Manifest::load_or_migrate(None)?;
 
             // Handle removals first
-            if !selection.to_remove.is_empty() {
+            if !answers.to_remove.is_empty() {
                 println!("{}", "Removing from deselected harnesses".bold());
-                for tool in &selection.to_remove {
+                for tool in &answers.to_remove {
                     match remove_tool_outcome(tool, &mut m) {
                         Ok(flow::Outcome::Done) => {
                             println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
@@ -223,9 +244,9 @@ fn handle_returning_user(
                 println!();
             }
 
-            if !selection.to_install.is_empty() {
+            if !answers.to_install.is_empty() {
                 println!("{}", "Configuring harnesses".bold());
-                for tool in &selection.to_install {
+                for tool in &answers.to_install {
                     install_tool(tool, endpoint, &mut m);
                 }
                 println!();
@@ -329,7 +350,7 @@ fn run_full_install(
 
     // ---- Plan summary ----
     println!();
-    print!("{}", flow::render_plan(&answers));
+    print!("{}", flow::render_plan(&answers, skill_path));
     println!();
     if !auto {
         let proceed = Confirm::new()
@@ -365,8 +386,8 @@ fn run_full_install(
         // without needing a separate id field on StepResult.
         let outcome = match outcome {
             flow::Outcome::Failed(msg) => flow::Outcome::Failed(format!(
-                "{msg}\n    {} {}",
-                "→ retry:".dimmed(),
+                "{msg} ({} {})",
+                "retry:".dimmed(),
                 format!("engrammic install --tool {tool_id_str}").cyan()
             )),
             other => other,
@@ -388,16 +409,10 @@ fn run_full_install(
         });
     }
 
+    // Save endpoint so returning users get the menu; folding it into the one
+    // manifest save avoids a second load/save round-trip over the same file.
+    m.endpoint = Some(endpoint);
     m.save()?;
-
-    // Save endpoint so returning users get the menu (merges via manifest).
-    let existing = user_config::UserConfig::load().unwrap_or_default();
-    let config = user_config::UserConfig {
-        endpoint: Some(endpoint),
-        license_key: existing.license_key,
-        selfhost_dir: existing.selfhost_dir,
-    };
-    config.save()?;
 
     // ---- Summary ----
     println!();
@@ -491,10 +506,20 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
         match tool.method {
             InstallMethod::FileEdit(shape) => {
                 if let Some(ep) = detect_installed_endpoint(tool) {
-                    let backup = config::ensure_backup(&tool.config_path)?;
-                    let _ = config::install(&tool.config_path, &ep, shape)?;
-                    println!("{} Refreshed engrammic in {}", "✓".green(), tool.name);
-                    m.record_harness(tool.id, &tool.config_path, backup, &ep);
+                    // Skip-and-continue: one broken config must not abort the rest.
+                    let refreshed = config::ensure_backup(&tool.config_path).and_then(|backup| {
+                        config::install(&tool.config_path, &ep, shape)?;
+                        Ok(backup)
+                    });
+                    match refreshed {
+                        Ok(backup) => {
+                            println!("{} Refreshed engrammic in {}", "✓".green(), tool.name);
+                            m.record_harness(tool.id, &tool.config_path, backup, &ep);
+                        }
+                        Err(e) => {
+                            println!("{} {} — {:#}", "✗".red(), tool.name, e);
+                        }
+                    }
                 } else {
                     println!("{} Not installed for {}", "!".yellow(), tool.name);
                 }
@@ -1092,7 +1117,7 @@ fn upgrade_docker() -> Result<()> {
         println!("{} No self-hosted installation found.", "!".yellow());
         println!(
             "  Run {} first to install the Docker stack.",
-            "engrammic docker".cyan()
+            "engrammic selfhost".cyan()
         );
         return Ok(());
     }

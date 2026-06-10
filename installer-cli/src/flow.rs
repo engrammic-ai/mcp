@@ -42,10 +42,15 @@ pub fn harness_label(tool: &Tool, detected: bool, configured: bool) -> String {
 }
 
 /// Human-readable recap of everything about to happen, shown before execution.
-pub fn render_plan(answers: &Answers) -> String {
+/// `custom_skill_path` is the `--skill-path` override, which installs skills
+/// even though `skill_dests` is empty.
+pub fn render_plan(answers: &Answers, custom_skill_path: Option<&str>) -> String {
     let mut out = String::from("About to:\n");
     if answers.to_install.is_empty() {
-        out.push_str("  • configure no editors\n");
+        // On a removal-only run, "configure no editors" would just be noise.
+        if answers.to_remove.is_empty() {
+            out.push_str("  • configure no editors\n");
+        }
     } else {
         let names: Vec<&str> = answers.to_install.iter().map(|t| t.name).collect();
         out.push_str(&format!("  • configure: {}\n", names.join(", ")));
@@ -53,7 +58,9 @@ pub fn render_plan(answers: &Answers) -> String {
     for t in &answers.to_remove {
         out.push_str(&format!("  • remove Engrammic from: {}\n", t.name));
     }
-    if answers.skill_dests.is_empty() {
+    if let Some(path) = custom_skill_path {
+        out.push_str(&format!("  • install skills from custom path: {}\n", path));
+    } else if answers.skill_dests.is_empty() {
         out.push_str("  • install no skills\n");
     } else {
         let names: Vec<&str> = answers.skill_dests.iter().map(|d| d.name).collect();
@@ -106,13 +113,30 @@ mod tests {
             to_remove: vec![],
             skill_dests: vec![],
         };
-        let plan = render_plan(&answers);
+        let plan = render_plan(&answers, None);
         assert!(plan.contains("Claude Code"));
         assert!(plan.contains("Windsurf"));
         assert!(plan.contains("beta.engrammic.ai"));
         assert!(
             plan.contains("no skills"),
             "empty skill dests must be stated, not omitted"
+        );
+    }
+
+    #[test]
+    fn render_plan_mentions_custom_skill_path_and_removal_only() {
+        let answers = Answers {
+            endpoint: "https://beta.engrammic.ai/mcp/".to_string(),
+            to_install: vec![],
+            to_remove: vec![tool("claude")],
+            skill_dests: vec![],
+        };
+        let plan = render_plan(&answers, Some("/tmp/my-skills"));
+        assert!(plan.contains("custom path: /tmp/my-skills"));
+        assert!(plan.contains("remove Engrammic from: Claude Code"));
+        assert!(
+            !plan.contains("configure no editors"),
+            "removal-only runs must not print the empty-configure line"
         );
     }
 
