@@ -42,9 +42,11 @@ fn main() -> Result<()> {
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
-        Commands::Logs { service, follow, lines } => {
-            logs::show_logs(service.as_deref(), follow, lines)
-        }
+        Commands::Logs {
+            service,
+            follow,
+            lines,
+        } => logs::show_logs(service.as_deref(), follow, lines),
         Commands::License => manage_license(),
         Commands::List => list(),
         Commands::Harnesses { .. } => print_harnesses_json(),
@@ -66,7 +68,10 @@ fn main() -> Result<()> {
                 "{} Could not initialize terminal input.",
                 "error:".red().bold()
             );
-            eprintln!("  Run with {} to auto-configure detected harnesses.", "-y".cyan());
+            eprintln!(
+                "  Run with {} to auto-configure detected harnesses.",
+                "-y".cyan()
+            );
             eprintln!("  Or ensure you're running in an interactive terminal.");
             std::process::exit(1);
         }
@@ -307,7 +312,10 @@ fn select_deployment_mode(existing_config: &user_config::UserConfig) -> Result<S
         "Cloud - connect to mcp.engrammic.ai (free tier available)",
         "Self-hosted - run locally with Docker (license required)",
     ];
-    println!("  {}", "(Self-hosted requires Docker and a license key)".dimmed());
+    println!(
+        "  {}",
+        "(Self-hosted requires Docker and a license key)".dimmed()
+    );
     let idx = Select::new()
         .with_prompt("Deployment mode")
         .items(&modes)
@@ -323,9 +331,11 @@ fn select_deployment_mode(existing_config: &user_config::UserConfig) -> Result<S
 }
 
 fn prompt_for_license(default: Option<&str>) -> Result<String> {
-    println!("  {}", "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed());
-    let mut prompt = Input::<String>::new()
-        .with_prompt("License key (input visible)");
+    println!(
+        "  {}",
+        "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed()
+    );
+    let mut prompt = Input::<String>::new().with_prompt("License key (input visible)");
 
     if let Some(key) = default {
         prompt = prompt.default(key.to_string());
@@ -399,7 +409,10 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     let default_dir = user_config::UserConfig::dir();
     let default_dir_str = default_dir.display().to_string();
 
-    println!("  {}", "(Compose file and .env will be written here)".dimmed());
+    println!(
+        "  {}",
+        "(Compose file and .env will be written here)".dimmed()
+    );
     let install_dir: String = Input::new()
         .with_prompt("Install directory")
         .default(default_dir_str)
@@ -408,7 +421,10 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     let dir = std::path::Path::new(&install_dir);
 
     // Telemetry consent.
-    println!("  {}", "(Helps improve Engrammic. Can be changed later in .env)".dimmed());
+    println!(
+        "  {}",
+        "(Helps improve Engrammic. Can be changed later in .env)".dimmed()
+    );
     let telemetry_enabled = Confirm::new()
         .with_prompt("Share anonymous usage statistics?")
         .default(true)
@@ -431,7 +447,10 @@ fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String>
     );
     println!();
 
-    println!("  {}", "(Change if running on a different host/port)".dimmed());
+    println!(
+        "  {}",
+        "(Change if running on a different host/port)".dimmed()
+    );
     let endpoint: String = Input::new()
         .with_prompt("MCP endpoint URL")
         .default(LOCAL_ENDPOINT.to_string())
@@ -576,19 +595,10 @@ fn remove_tool(tool: &Tool) -> Result<()> {
             m.save()?;
         }
         InstallMethod::DeepLink(_) => {
-            println!(
-                "  {} {} - remove via app settings",
-                "!".yellow(),
-                tool.name
-            );
+            println!("  {} {} - remove via app settings", "!".yellow(), tool.name);
         }
         InstallMethod::PrintInstructions(hint) => {
-            println!(
-                "  {} {} - remove via {}",
-                "!".yellow(),
-                tool.name,
-                hint
-            );
+            println!("  {} {} - remove via {}", "!".yellow(), tool.name, hint);
         }
     }
     Ok(())
@@ -882,17 +892,22 @@ fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<ToolSelection> {
         .map(|(i, _)| i)
         .collect();
 
-    println!("  {}", "(↑↓ move · space toggle · enter confirm (deselect to remove))".dimmed());
+    println!(
+        "  {}",
+        "(↑↓ move · space toggle · enter confirm (deselect to remove))".dimmed()
+    );
     let selection_indices = MultiSelect::new()
         .with_prompt("Select harnesses to configure")
         .items(&options)
-        .defaults(&(0..options.len()).map(|i| defaults.contains(&i)).collect::<Vec<_>>())
+        .defaults(
+            &(0..options.len())
+                .map(|i| defaults.contains(&i))
+                .collect::<Vec<_>>(),
+        )
         .interact()?;
 
-    let selected_names: std::collections::HashSet<_> = selection_indices
-        .into_iter()
-        .map(|i| options[i])
-        .collect();
+    let selected_names: std::collections::HashSet<_> =
+        selection_indices.into_iter().map(|i| options[i]).collect();
 
     let to_install: Vec<Tool> = all_tools
         .clone()
@@ -931,9 +946,11 @@ fn install_docker() -> Result<()> {
     println!();
 
     // Prompt for license key.
-    println!("  {}", "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed());
-    let mut license_prompt = Input::<String>::new()
-        .with_prompt("License key (input visible)");
+    println!(
+        "  {}",
+        "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed()
+    );
+    let mut license_prompt = Input::<String>::new().with_prompt("License key (input visible)");
 
     if let Some(ref key) = existing_config.license_key {
         license_prompt = license_prompt.default(key.clone());
@@ -963,7 +980,10 @@ fn install_docker() -> Result<()> {
     let default_dir = user_config::UserConfig::dir();
     let default_dir_str = default_dir.display().to_string();
 
-    println!("  {}", "(Compose file and .env will be written here)".dimmed());
+    println!(
+        "  {}",
+        "(Compose file and .env will be written here)".dimmed()
+    );
     let install_dir: String = Input::new()
         .with_prompt("Install directory")
         .default(default_dir_str)
@@ -972,7 +992,10 @@ fn install_docker() -> Result<()> {
     let dir = std::path::Path::new(&install_dir);
 
     // Telemetry consent.
-    println!("  {}", "(Helps improve Engrammic. Can be changed later in .env)".dimmed());
+    println!(
+        "  {}",
+        "(Helps improve Engrammic. Can be changed later in .env)".dimmed()
+    );
     let telemetry_enabled = Confirm::new()
         .with_prompt("Share anonymous usage statistics?")
         .default(true)
@@ -1176,12 +1199,19 @@ fn install_skills_only(auto: bool, skill_path: Option<&str>) -> Result<()> {
             .map(|(i, _)| i)
             .collect();
 
-        println!("  {}", "(↑↓ move · space toggle · enter confirm (detected tools pre-selected))".dimmed());
+        println!(
+            "  {}",
+            "(↑↓ move · space toggle · enter confirm (detected tools pre-selected))".dimmed()
+        );
         let options_strs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
         let picked_indices = MultiSelect::new()
             .with_prompt("Install skills to")
             .items(&options_strs)
-            .defaults(&(0..options.len()).map(|i| defaults.contains(&i)).collect::<Vec<_>>())
+            .defaults(
+                &(0..options.len())
+                    .map(|i| defaults.contains(&i))
+                    .collect::<Vec<_>>(),
+            )
             .interact()?;
 
         all_dests
@@ -1258,7 +1288,10 @@ fn upgrade_docker() -> Result<()> {
             new_services.join(", ").cyan()
         );
 
-        println!("  {}", "(Your .env will be preserved. Old compose backed up to .bak)".dimmed());
+        println!(
+            "  {}",
+            "(Your .env will be preserved. Old compose backed up to .bak)".dimmed()
+        );
         let update_compose = Confirm::new()
             .with_prompt("Update docker-compose.yml to include new services?")
             .default(true)
@@ -1367,9 +1400,11 @@ fn manage_license() -> Result<()> {
         return Ok(());
     }
 
-    println!("  {}", "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed());
-    let mut prompt = Input::<String>::new()
-        .with_prompt("License key (input visible)");
+    println!(
+        "  {}",
+        "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed()
+    );
+    let mut prompt = Input::<String>::new().with_prompt("License key (input visible)");
 
     if let Some(ref key) = config.license_key {
         prompt = prompt.default(key.clone());

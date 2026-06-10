@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 const KEY_PREFIX: &str = "ENGR_";
 const ISSUER: &str = "engrammic";

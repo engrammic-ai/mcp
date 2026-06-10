@@ -65,7 +65,6 @@ pub fn get_installed_endpoint(config_path: &Path, shape: ConfigShape) -> Option<
 /// Create `<path>.engrammic.bak` before our first mutation of a harness config.
 /// Idempotent: an existing backup is never overwritten, so it always preserves
 /// the pre-Engrammic state. Returns None when there is nothing to back up.
-#[allow(dead_code)]
 pub fn ensure_backup(config_path: &Path) -> Result<Option<std::path::PathBuf>> {
     if !config_path.exists() {
         return Ok(None);
@@ -75,7 +74,11 @@ pub fn ensure_backup(config_path: &Path) -> Result<Option<std::path::PathBuf>> {
     let bak = std::path::PathBuf::from(bak);
     if !bak.exists() {
         fs::copy(config_path, &bak).with_context(|| {
-            format!("failed to back up {} to {}", config_path.display(), bak.display())
+            format!(
+                "failed to back up {} to {}",
+                config_path.display(),
+                bak.display()
+            )
         })?;
     }
     Ok(Some(bak))
@@ -1049,13 +1052,19 @@ mod backup_tests {
         std::fs::write(&cfg, "{\"original\": true}").unwrap();
 
         let bak = ensure_backup(&cfg).unwrap().expect("backup path");
-        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "{\"original\": true}");
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            "{\"original\": true}"
+        );
 
         // Mutate the config, call again: backup must keep the ORIGINAL content.
         std::fs::write(&cfg, "{\"mutated\": true}").unwrap();
         let bak2 = ensure_backup(&cfg).unwrap().expect("backup path");
         assert_eq!(bak, bak2);
-        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "{\"original\": true}");
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            "{\"original\": true}"
+        );
     }
 
     #[test]
@@ -1063,6 +1072,9 @@ mod backup_tests {
         let dir = tempdir().unwrap();
         let cfg = dir.path().join("does-not-exist.json");
         assert!(ensure_backup(&cfg).unwrap().is_none());
-        assert!(!dir.path().join("does-not-exist.json.engrammic.bak").exists());
+        assert!(!dir
+            .path()
+            .join("does-not-exist.json.engrammic.bak")
+            .exists());
     }
 }

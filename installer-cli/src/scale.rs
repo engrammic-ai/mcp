@@ -8,7 +8,12 @@ use std::process::Command;
 /// Get current memory usage from docker stats.
 fn get_memory_usage() -> Result<HashMap<String, (u64, u64)>> {
     let output = Command::new("docker")
-        .args(["stats", "--no-stream", "--format", "{{.Name}}\t{{.MemUsage}}"])
+        .args([
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{.Name}}\t{{.MemUsage}}",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -33,7 +38,9 @@ fn get_memory_usage() -> Result<HashMap<String, (u64, u64)>> {
 
 fn parse_mem_usage(s: &str) -> Option<(u64, u64)> {
     let parts: Vec<&str> = s.split(" / ").collect();
-    if parts.len() != 2 { return None; }
+    if parts.len() != 2 {
+        return None;
+    }
     let used = parse_mem_value(parts[0])?;
     let limit = parse_mem_value(parts[1])?;
     Some((used, limit))
@@ -56,18 +63,33 @@ pub fn show_status() -> Result<()> {
     println!();
     println!("{}", "Current resource usage:".bold());
     println!();
-    println!("  {:<25} {:<12} {:<12} {}", "Container", "Used", "Limit", "Usage");
+    println!(
+        "  {:<25} {:<12} {:<12} {}",
+        "Container", "Used", "Limit", "Usage"
+    );
     println!("  {}", "-".repeat(60));
 
     let usage = get_memory_usage()?;
     let mut high_usage = Vec::new();
 
     for (name, (used, limit)) in &usage {
-        let percent = if *limit > 0 { (*used as f64 / *limit as f64 * 100.0) as u32 } else { 0 };
-        let warning = if percent >= 80 { " !!".yellow().to_string() } else { "".to_string() };
+        let percent = if *limit > 0 {
+            (*used as f64 / *limit as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        let warning = if percent >= 80 {
+            " !!".yellow().to_string()
+        } else {
+            "".to_string()
+        };
         println!(
             "  {:<25} {:<12} {:<12} {}%{}",
-            name, format!("{}MB", used), format!("{}MB", limit), percent, warning
+            name,
+            format!("{}MB", used),
+            format!("{}MB", limit),
+            percent,
+            warning
         );
         if percent >= 80 {
             let new_limit = (*limit as f64 * 1.5) as u64;
@@ -77,7 +99,10 @@ pub fn show_status() -> Result<()> {
 
     if !high_usage.is_empty() {
         println!();
-        println!("{}", "Containers near limit - recommended changes to docker-compose.yml:".yellow());
+        println!(
+            "{}",
+            "Containers near limit - recommended changes to docker-compose.yml:".yellow()
+        );
         println!();
         for (name, old, new) in &high_usage {
             let service = name.trim_start_matches("engrammic-");

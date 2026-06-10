@@ -57,7 +57,7 @@ pub fn extract_body(content: &str) -> &str {
     // Find closing ---
     if let Some(end) = rest.find("\n---") {
         let after_close = &rest[end + 4..]; // skip \n---
-        // Skip trailing newlines after closing --- (handles blank line after frontmatter)
+                                            // Skip trailing newlines after closing --- (handles blank line after frontmatter)
         after_close.trim_start_matches('\n')
     } else {
         // Malformed: opening --- but no closing ---; treat full content as body.
@@ -134,7 +134,11 @@ pub fn merge_into_gemini_md(existing: &str, skills: &[SkillEntry]) -> String {
         // Strip a single trailing newline from before to avoid double-blank-lines.
         let before = before.trim_end_matches('\n');
         // Strip a single leading newline from after.
-        let after = if after.starts_with('\n') { &after[1..] } else { after };
+        let after = if after.starts_with('\n') {
+            &after[1..]
+        } else {
+            after
+        };
 
         if before.is_empty() && after.is_empty() {
             return section;
@@ -303,10 +307,7 @@ mod tests {
     #[test]
     fn gemini_section_empty_skills() {
         let section = build_gemini_section(&[]);
-        assert_eq!(
-            section,
-            format!("{}\n{}", MARKER_START, MARKER_END)
-        );
+        assert_eq!(section, format!("{}\n{}", MARKER_START, MARKER_END));
     }
 
     // ---- merge_into_gemini_md ----
@@ -386,7 +387,10 @@ mod tests {
 
     #[test]
     fn remove_only_marked_section_returns_empty() {
-        let content = format!("{}\n## engrammic-recall\nBody.\n{}", MARKER_START, MARKER_END);
+        let content = format!(
+            "{}\n## engrammic-recall\nBody.\n{}",
+            MARKER_START, MARKER_END
+        );
         let result = remove_from_gemini_md(&content);
         assert!(result.is_empty());
     }

@@ -8,7 +8,10 @@ pub fn offer_cli_install(auto: bool) -> Result<()> {
     let install_cli = if auto {
         false
     } else {
-        println!("  {}", "(Allows running 'engrammic update', 'engrammic status', etc.)".dimmed());
+        println!(
+            "  {}",
+            "(Allows running 'engrammic update', 'engrammic status', etc.)".dimmed()
+        );
         Confirm::new()
             .with_prompt("Install the Engrammic CLI for future updates?")
             .default(true)

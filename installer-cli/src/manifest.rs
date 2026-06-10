@@ -70,11 +70,6 @@ impl Manifest {
         dir.join("state.toml")
     }
 
-    #[allow(dead_code)]
-    pub fn load() -> Result<Self> {
-        Self::load_in(&Self::dir())
-    }
-
     pub fn load_in(dir: &Path) -> Result<Self> {
         let path = Self::path_in(dir);
         if !path.exists() {
@@ -82,23 +77,19 @@ impl Manifest {
         }
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("failed to parse {}", path.display()))
+        toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
     }
 
-    #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         self.save_in(&Self::dir())
     }
 
     pub fn save_in(&self, dir: &Path) -> Result<()> {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("failed to create {}", dir.display()))?;
+        fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
         let path = Self::path_in(dir);
         let tmp = dir.join(format!("state.toml.{}.tmp", std::process::id()));
         let content = toml::to_string_pretty(self).context("failed to serialize manifest")?;
-        fs::write(&tmp, content)
-            .with_context(|| format!("failed to write {}", tmp.display()))?;
+        fs::write(&tmp, content).with_context(|| format!("failed to write {}", tmp.display()))?;
         if let Err(e) = fs::rename(&tmp, &path) {
             let _ = fs::remove_file(&tmp);
             return Err(e).with_context(|| {
@@ -110,7 +101,6 @@ impl Manifest {
 
     /// Load the manifest, synthesizing one from the legacy config.toml on first run.
     /// The legacy file is left in place until Phase 1b removes its last readers.
-    #[allow(dead_code)]
     pub fn load_or_migrate(dir_override: Option<&Path>) -> Result<Self> {
         match dir_override {
             Some(d) => Self::load_or_migrate_in(d),
@@ -148,10 +138,11 @@ impl Manifest {
     }
 
     pub fn record_skill(&mut self, harness: &str, path: &Path, format: &str, scope: &str) {
+        let path = absolutize(path);
         if !self.skills.iter().any(|s| s.path == path) {
             self.skills.push(SkillEntry {
                 harness: harness.to_string(),
-                path: path.to_path_buf(),
+                path,
                 format: format.to_string(),
                 scope: scope.to_string(),
             });
@@ -159,6 +150,7 @@ impl Manifest {
     }
 
     pub fn forget_skill(&mut self, path: &Path) {
+        let path = absolutize(path);
         self.skills.retain(|s| s.path != path);
     }
 
@@ -193,6 +185,19 @@ impl Manifest {
         };
         manifest.save_in(dir)?;
         Ok(manifest)
+    }
+}
+
+/// Project-scope skill destinations use CWD-relative paths (e.g. `.cursor/rules`);
+/// the manifest must never store CWD-dependent paths or uninstall would resolve
+/// them against the wrong directory.
+fn absolutize(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
     }
 }
 
@@ -247,7 +252,10 @@ mod tests {
         m.save_in(dir.path()).unwrap();
 
         let loaded = Manifest::load_in(dir.path()).unwrap();
-        assert_eq!(loaded.endpoint.as_deref(), Some("https://beta.engrammic.ai/mcp/"));
+        assert_eq!(
+            loaded.endpoint.as_deref(),
+            Some("https://beta.engrammic.ai/mcp/")
+        );
         assert_eq!(loaded.harnesses.len(), 1);
         assert_eq!(loaded.harnesses[0].tool_id, "cursor");
         assert_eq!(loaded.skills[0].format, "directory");
@@ -291,7 +299,10 @@ mod tests {
         let m = Manifest::load_or_migrate_in(dir.path()).unwrap();
         assert_eq!(m.endpoint.as_deref(), Some("http://localhost:8000/mcp"));
         assert_eq!(m.license_key.as_deref(), Some("eng_abc"));
-        assert_eq!(m.selfhost_dir.as_deref(), Some(std::path::Path::new("/opt/engrammic")));
+        assert_eq!(
+            m.selfhost_dir.as_deref(),
+            Some(std::path::Path::new("/opt/engrammic"))
+        );
         // state.toml persisted, config.toml untouched (removed in Phase 1b)
         assert!(dir.path().join("state.toml").exists());
         assert!(dir.path().join("config.toml").exists());
@@ -300,7 +311,11 @@ mod tests {
     #[test]
     fn state_toml_wins_over_legacy() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("config.toml"), "endpoint = \"http://old\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "endpoint = \"http://old\"\n",
+        )
+        .unwrap();
         let mut m = Manifest::default();
         m.endpoint = Some("http://new".into());
         m.save_in(dir.path()).unwrap();
@@ -321,10 +336,18 @@ mod tests {
     fn record_harness_upserts_by_tool_id() {
         let mut m = Manifest::default();
         m.record_harness("cursor", Path::new("/tmp/a.json"), None, "http://e1");
-        m.record_harness("cursor", Path::new("/tmp/a.json"), Some(PathBuf::from("/tmp/a.json.engrammic.bak")), "http://e2");
+        m.record_harness(
+            "cursor",
+            Path::new("/tmp/a.json"),
+            Some(PathBuf::from("/tmp/a.json.engrammic.bak")),
+            "http://e2",
+        );
         assert_eq!(m.harnesses.len(), 1);
         assert_eq!(m.harnesses[0].endpoint, "http://e2");
-        assert!(m.harnesses[0].backup_path.is_some(), "backup path must not be lost on upsert");
+        assert!(
+            m.harnesses[0].backup_path.is_some(),
+            "backup path must not be lost on upsert"
+        );
         m.forget_harness("cursor");
         assert!(m.harnesses.is_empty());
     }
@@ -335,5 +358,24 @@ mod tests {
         m.record_skill("claude", Path::new("/tmp/skills"), "directory", "user");
         m.record_skill("claude", Path::new("/tmp/skills"), "directory", "user");
         assert_eq!(m.skills.len(), 1);
+    }
+
+    #[test]
+    fn record_skill_absolutizes_relative_paths() {
+        let mut m = Manifest::default();
+        m.record_skill(
+            "cursor",
+            Path::new(".cursor/rules"),
+            "cursor-mdc",
+            "project",
+        );
+        assert!(
+            m.skills[0].path.is_absolute(),
+            "manifest must never store CWD-relative paths"
+        );
+        assert!(m.skills[0].path.ends_with(".cursor/rules"));
+        // forget_skill must resolve the same way so the relative form still matches.
+        m.forget_skill(Path::new(".cursor/rules"));
+        assert!(m.skills.is_empty());
     }
 }

@@ -7,9 +7,7 @@ use std::process::Command;
 
 /// Check if Docker is available and running.
 pub fn check_docker() -> Result<bool> {
-    let output = Command::new("docker")
-        .args(["info"])
-        .output();
+    let output = Command::new("docker").args(["info"]).output();
 
     match output {
         Ok(o) => Ok(o.status.success()),
@@ -98,8 +96,7 @@ POSTGRES_PASSWORD=engrammic
 # Anonymous usage statistics
 TELEMETRY_ENABLED={}
 "#,
-        license_key,
-        telemetry_enabled
+        license_key, telemetry_enabled
     );
 
     let env_path = dir.join(".env");

@@ -52,14 +52,7 @@ pub fn show_logs(service: Option<&str>, follow: bool, lines: u32) -> Result<()> 
     let lines_str = lines.to_string();
     let compose_str = compose_path.to_str().unwrap();
 
-    let mut args = vec![
-        "compose",
-        "-f",
-        compose_str,
-        "logs",
-        "--tail",
-        &lines_str,
-    ];
+    let mut args = vec!["compose", "-f", compose_str, "logs", "--tail", &lines_str];
 
     if follow {
         args.push("-f");
@@ -69,10 +62,7 @@ pub fn show_logs(service: Option<&str>, follow: bool, lines: u32) -> Result<()> 
         args.push(&service_name);
     }
 
-    println!(
-        "{}",
-        format!("Showing logs for: {}", service_name).dimmed()
-    );
+    println!("{}", format!("Showing logs for: {}", service_name).dimmed());
     println!();
 
     Command::new("docker")

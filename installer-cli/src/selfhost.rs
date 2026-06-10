@@ -106,11 +106,7 @@ pub fn run_wizard() -> Result<()> {
             "✓".green(),
             format!("{:?}", tier).to_lowercase()
         );
-        (
-            "tei/nomic-ai/nomic-embed-text-v1.5".to_string(),
-            768,
-            None,
-        )
+        ("tei/nomic-ai/nomic-embed-text-v1.5".to_string(), 768, None)
     } else {
         println!();
         println!("{}", "Step 4/6: Embeddings".bold());
@@ -189,10 +185,7 @@ fn print_welcome() {
     );
     println!();
     println!("  {}", "Engrammic Self-Hosted Setup".bold());
-    println!(
-        "  {}",
-        "Memory infrastructure for AI agents".dimmed()
-    );
+    println!("  {}", "Memory infrastructure for AI agents".dimmed());
     println!();
     println!(
         "{}",
@@ -227,9 +220,7 @@ fn check_prerequisites() -> Result<()> {
 
     // Docker Compose v2
     print!("  Checking Docker Compose... ");
-    let compose_check = Command::new("docker")
-        .args(["compose", "version"])
-        .output();
+    let compose_check = Command::new("docker").args(["compose", "version"]).output();
     match compose_check {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
@@ -311,23 +302,42 @@ fn prompt_tier() -> Result<Tier> {
     let tiers = vec![
         format!(
             "Pro      (48GB+) - gemma4:26b + jina-reranker{}",
-            if recommended == 0 { " (Recommended)" } else { "" }
+            if recommended == 0 {
+                " (Recommended)"
+            } else {
+                ""
+            }
         ),
         format!(
             "Standard (24GB)  - gemma4:12b + bge-reranker{}",
-            if recommended == 1 { " (Recommended)" } else { "" }
+            if recommended == 1 {
+                " (Recommended)"
+            } else {
+                ""
+            }
         ),
         format!(
             "Lite     (8GB)   - phi4-mini, no reranker{}",
-            if recommended == 2 { " (Recommended)" } else { "" }
+            if recommended == 2 {
+                " (Recommended)"
+            } else {
+                ""
+            }
         ),
         format!(
             "Cloud    (any)   - use cloud APIs{}",
-            if recommended == 3 { " (Recommended)" } else { "" }
+            if recommended == 3 {
+                " (Recommended)"
+            } else {
+                ""
+            }
         ),
     ];
 
-    println!("  {}", "(Standalone tiers run models locally with Ollama + TEI)".dimmed());
+    println!(
+        "  {}",
+        "(Standalone tiers run models locally with Ollama + TEI)".dimmed()
+    );
     let idx = Select::new()
         .with_prompt("Select tier based on available RAM")
         .items(&tiers)
@@ -413,10 +423,7 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
             println!("  {} Model {} downloaded", "✓".green(), model);
         }
         _ => {
-            println!(
-                "  {} Model download may still be in progress",
-                "!".yellow()
-            );
+            println!("  {} Model download may still be in progress", "!".yellow());
             println!("  Check with: docker exec engrammic-ollama ollama list");
         }
     }
@@ -445,7 +452,10 @@ fn prompt_license() -> Result<String> {
     }
 
     loop {
-        println!("  {}", "(Starts with ENGR_ - request at founders@engrammic.ai)".dimmed());
+        println!(
+            "  {}",
+            "(Starts with ENGR_ - request at founders@engrammic.ai)".dimmed()
+        );
         let key: String = Input::new()
             .with_prompt("License key (input visible)")
             .interact_text()?;
@@ -506,11 +516,13 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
             println!("  {} Dimensions: {} (auto-filled)", "✓".green(), dims);
 
             println!("  {}", "(Your OpenAI API key (starts with sk-))".dimmed());
-            let key: String = Input::new()
-                .with_prompt("OPENAI_API_KEY")
-                .interact_text()?;
+            let key: String = Input::new().with_prompt("OPENAI_API_KEY").interact_text()?;
 
-            (model.to_string(), dims, Some(("OPENAI_API_KEY".to_string(), key)))
+            (
+                model.to_string(),
+                dims,
+                Some(("OPENAI_API_KEY".to_string(), key)),
+            )
         }
         "Ollama (local, free)" => {
             let models = vec![
@@ -518,7 +530,10 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
                 "all-minilm (384 dims, smaller)",
                 "Other (enter manually)",
             ];
-            println!("  {}", "(Make sure this model is pulled in Ollama)".dimmed());
+            println!(
+                "  {}",
+                "(Make sure this model is pulled in Ollama)".dimmed()
+            );
             let model_idx = Select::new()
                 .with_prompt("Model")
                 .items(&models)
@@ -531,10 +546,11 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
             } else if model_choice.starts_with("all-minilm") {
                 ("ollama/all-minilm".to_string(), 384)
             } else {
-                println!("  {}", "(Just the model name, e.g. mxbai-embed-large)".dimmed());
-                let name: String = Input::new()
-                    .with_prompt("Model name")
-                    .interact_text()?;
+                println!(
+                    "  {}",
+                    "(Just the model name, e.g. mxbai-embed-large)".dimmed()
+                );
+                let name: String = Input::new().with_prompt("Model name").interact_text()?;
                 let dims = prompt_dimensions()?;
                 (format!("ollama/{}", name), dims)
             };
@@ -557,9 +573,7 @@ fn prompt_embeddings() -> Result<(String, u32, Option<(String, String)>)> {
             println!("  {} Dimensions: {}", "✓".green(), dims);
 
             println!("  {}", "(Your Google Cloud project ID)".dimmed());
-            let project: String = Input::new()
-                .with_prompt("VERTEX_PROJECT")
-                .interact_text()?;
+            let project: String = Input::new().with_prompt("VERTEX_PROJECT").interact_text()?;
             println!("  {}", "(GCP region for Vertex AI)".dimmed());
             let location: String = Input::new()
                 .with_prompt("VERTEX_LOCATION")
@@ -600,11 +614,16 @@ fn prompt_dimensions() -> Result<u32> {
     );
     println!("           Fixing requires wiping and re-embedding all data.");
     println!();
-    println!("  {}", "(Check your model's documentation for the correct value)".dimmed());
+    println!(
+        "  {}",
+        "(Check your model's documentation for the correct value)".dimmed()
+    );
     let dims_str: String = Input::new()
         .with_prompt("Embedding dimensions")
         .interact_text()?;
-    dims_str.parse::<u32>().context("Invalid dimensions - must be a positive integer")
+    dims_str
+        .parse::<u32>()
+        .context("Invalid dimensions - must be a positive integer")
 }
 
 fn read_existing_ports(install_dir: &Path) -> (Option<u16>, Option<u16>) {
@@ -620,11 +639,17 @@ fn read_existing_ports(install_dir: &Path) -> (Option<u16>, Option<u16>) {
         let trimmed = line.trim();
         // Look for port mappings like '- "9000:8000"' or '- "3001:3000"'
         if trimmed.starts_with("- \"") && trimmed.contains(":8000\"") {
-            if let Some(port_str) = trimmed.strip_prefix("- \"").and_then(|s| s.split(':').next()) {
+            if let Some(port_str) = trimmed
+                .strip_prefix("- \"")
+                .and_then(|s| s.split(':').next())
+            {
                 app_port = port_str.parse().ok();
             }
         } else if trimmed.starts_with("- \"") && trimmed.contains(":3000\"") {
-            if let Some(port_str) = trimmed.strip_prefix("- \"").and_then(|s| s.split(':').next()) {
+            if let Some(port_str) = trimmed
+                .strip_prefix("- \"")
+                .and_then(|s| s.split(':').next())
+            {
                 dagster_port = port_str.parse().ok();
             }
         }
@@ -641,17 +666,11 @@ fn prompt_port(existing: Option<u16>) -> Result<u16> {
         .default(default.to_string())
         .interact_text()?;
 
-    let port: u16 = port_str
-        .parse()
-        .context("Invalid port number")?;
+    let port: u16 = port_str.parse().context("Invalid port number")?;
 
     // Check if port is in use
     if is_port_in_use(port) {
-        println!(
-            "  {} Port {} appears to be in use",
-            "!".yellow(),
-            port
-        );
+        println!("  {} Port {} appears to be in use", "!".yellow(), port);
         let proceed = Confirm::new()
             .with_prompt("  Continue anyway?")
             .default(false)
@@ -690,7 +709,10 @@ fn prompt_install_dir() -> Result<PathBuf> {
     let default = UserConfig::dir();
     let default_str = default.display().to_string();
 
-    println!("  {}", "(docker-compose.yml and .env will be created here)".dimmed());
+    println!(
+        "  {}",
+        "(docker-compose.yml and .env will be created here)".dimmed()
+    );
     let dir_str: String = Input::new()
         .with_prompt("Install directory")
         .default(default_str)
@@ -699,10 +721,7 @@ fn prompt_install_dir() -> Result<PathBuf> {
     let path = PathBuf::from(dir_str);
 
     if path.exists() && path.join("docker-compose.yml").exists() {
-        println!(
-            "  {} Existing installation found",
-            "!".yellow()
-        );
+        println!("  {} Existing installation found", "!".yellow());
         let overwrite = Confirm::new()
             .with_prompt("  Overwrite?")
             .default(false)
@@ -716,7 +735,10 @@ fn prompt_install_dir() -> Result<PathBuf> {
 }
 
 fn prompt_postgres_password() -> Result<String> {
-    println!("  {}", "(For local dev the default is fine; use a strong password in production)".dimmed());
+    println!(
+        "  {}",
+        "(For local dev the default is fine; use a strong password in production)".dimmed()
+    );
     let password: String = Input::new()
         .with_prompt("PostgreSQL password")
         .default("engrammic".into())
@@ -815,7 +837,10 @@ fn generate_compose(config: &SelfHostConfig) -> String {
     // Replace ports and env file references
     let mut compose = template
         .replace("- \"8000:8000\"", &format!("- \"{}:8000\"", config.port))
-        .replace("- \"3000:3000\"", &format!("- \"{}:3000\"", config.dagster_port));
+        .replace(
+            "- \"3000:3000\"",
+            &format!("- \"{}:3000\"", config.dagster_port),
+        );
 
     // For standalone tiers, replace env_file reference with just .env
     if config.tier.is_standalone() {
@@ -956,12 +981,7 @@ fn start_and_wait(config: &SelfHostConfig) -> Result<()> {
     // Pull images first
     println!("  Pulling images (this may take a few minutes)...");
     let pull = Command::new("docker")
-        .args([
-            "compose",
-            "-f",
-            compose_path.to_str().unwrap(),
-            "pull",
-        ])
+        .args(["compose", "-f", compose_path.to_str().unwrap(), "pull"])
         .current_dir(&config.install_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -977,13 +997,7 @@ fn start_and_wait(config: &SelfHostConfig) -> Result<()> {
 
     // Start services
     let status = Command::new("docker")
-        .args([
-            "compose",
-            "-f",
-            compose_path.to_str().unwrap(),
-            "up",
-            "-d",
-        ])
+        .args(["compose", "-f", compose_path.to_str().unwrap(), "up", "-d"])
         .current_dir(&config.install_dir)
         .status()
         .context("Failed to run docker compose up")?;
@@ -1009,9 +1023,7 @@ fn wait_for_healthy(config: &SelfHostConfig) -> Result<()> {
     for attempt in 1..=max_attempts {
         std::thread::sleep(delay);
 
-        let result = Command::new("curl")
-            .args(["-sf", &health_url])
-            .output();
+        let result = Command::new("curl").args(["-sf", &health_url]).output();
 
         match result {
             Ok(output) if output.status.success() => {
@@ -1031,10 +1043,7 @@ fn wait_for_healthy(config: &SelfHostConfig) -> Result<()> {
         }
     }
 
-    println!(
-        "  {} Services didn't become healthy in time",
-        "!".yellow()
-    );
+    println!("  {} Services didn't become healthy in time", "!".yellow());
     println!("  Run {} to diagnose", "engrammic doctor".cyan());
     Ok(())
 }
@@ -1048,13 +1057,14 @@ fn configure_editors(config: &SelfHostConfig) -> Result<()> {
 
     let detected = Tool::detect_installed();
     if detected.is_empty() {
-        println!(
-            "  {} No supported editors detected",
-            "-".dimmed()
-        );
+        println!("  {} No supported editors detected", "-".dimmed());
         println!(
             "  Add this to your MCP config: {}",
-            format!("\"engrammic\": {{ \"type\": \"http\", \"url\": \"http://localhost:{}/mcp\" }}", config.port).cyan()
+            format!(
+                "\"engrammic\": {{ \"type\": \"http\", \"url\": \"http://localhost:{}/mcp\" }}",
+                config.port
+            )
+            .cyan()
         );
         return Ok(());
     }
@@ -1064,8 +1074,12 @@ fn configure_editors(config: &SelfHostConfig) -> Result<()> {
     for tool in &detected {
         match &tool.method {
             InstallMethod::FileEdit(shape) => {
+                let backup = crate::config::ensure_backup(&tool.config_path).unwrap_or(None);
                 match crate::config::install(&tool.config_path, &endpoint, *shape) {
                     Ok(_) => {
+                        let mut m = crate::manifest::Manifest::load_or_migrate(None)?;
+                        m.record_harness(tool.id, &tool.config_path, backup, &endpoint);
+                        m.save()?;
                         println!("  {} {}", "✓".green(), tool.name);
                     }
                     Err(e) => {
@@ -1148,7 +1162,9 @@ mod tests {
         let yaml: serde_yaml::Value =
             serde_yaml::from_str(template).expect("assets/models.yaml must be valid YAML");
 
-        let mapping = yaml.as_mapping().expect("assets/models.yaml must be a YAML mapping");
+        let mapping = yaml
+            .as_mapping()
+            .expect("assets/models.yaml must be a YAML mapping");
 
         assert!(
             mapping.contains_key("default_tier"),

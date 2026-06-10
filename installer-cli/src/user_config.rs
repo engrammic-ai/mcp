@@ -78,7 +78,11 @@ mod tests {
         let m = Manifest::load_in(dir.path()).unwrap();
         assert_eq!(m.endpoint.as_deref(), Some("http://new"));
         assert_eq!(m.license_key.as_deref(), Some("eng_k"));
-        assert_eq!(m.harnesses.len(), 1, "save() must not clobber manifest entries");
+        assert_eq!(
+            m.harnesses.len(),
+            1,
+            "save() must not clobber manifest entries"
+        );
 
         let loaded = UserConfig::load_in(dir.path()).unwrap();
         assert_eq!(loaded.endpoint.as_deref(), Some("http://new"));
