@@ -184,6 +184,8 @@ impl Manifest {
             ..Self::default()
         };
         manifest.save_in(dir)?;
+        // Migration succeeded and is persisted; the legacy file has no readers left.
+        let _ = fs::remove_file(&legacy);
         Ok(manifest)
     }
 }
@@ -303,9 +305,11 @@ mod tests {
             m.selfhost_dir.as_deref(),
             Some(std::path::Path::new("/opt/engrammic"))
         );
-        // state.toml persisted, config.toml untouched (removed in Phase 1b)
         assert!(dir.path().join("state.toml").exists());
-        assert!(dir.path().join("config.toml").exists());
+        assert!(
+            !dir.path().join("config.toml").exists(),
+            "legacy config.toml is removed after successful migration"
+        );
     }
 
     #[test]
