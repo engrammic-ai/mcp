@@ -181,12 +181,27 @@ jobs:
                      npm/install-darwin-x64 npm/install-darwin-arm64 \
                      npm/install-win32-x64; do
             echo "Publishing $dir ..."
-            npm publish "$dir" --access public
+            if ! out=$(npm publish "$dir" --access public 2>&1); then
+              if printf '%s' "$out" | grep -q "previously published\|cannot publish over\|EPUBLISHCONFLICT\|403"; then
+                echo "already published — skipping $dir"
+              else
+                printf '%s\n' "$out" >&2
+                exit 1
+              fi
+            fi
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish root launcher package
-        run: npm publish npm/install --access public
+        run: |
+          if ! out=$(npm publish npm/install --access public 2>&1); then
+            if printf '%s' "$out" | grep -q "previously published\|cannot publish over\|EPUBLISHCONFLICT\|403"; then
+              echo "already published — skipping npm/install"
+            else
+              printf '%s\n' "$out" >&2
+              exit 1
+            fi
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

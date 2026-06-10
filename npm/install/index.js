@@ -61,4 +61,8 @@ if (result.error) {
   console.error(`[engrammic] Failed to spawn binary: ${result.error.message}`);
   process.exit(1);
 }
+if (result.signal) {
+  // Re-raise so callers see the real signal, not exit code 1.
+  process.kill(process.pid, result.signal);
+}
 process.exit(result.status ?? 1);

@@ -413,6 +413,10 @@ fn run_full_install(
     // Save endpoint so returning users get the menu; folding it into the one
     // manifest save avoids a second load/save round-trip over the same file.
     m.endpoint = Some(endpoint);
+    // Record where the binary lives so uninstall can offer self-removal.
+    if let Ok(exe) = std::env::current_exe() {
+        m.binary_path = Some(exe);
+    }
     m.save()?;
 
     // ---- Summary ----
@@ -722,7 +726,7 @@ fn remove_one_harness(entry: &manifest::HarnessEntry) -> flow::Outcome {
         Some(t) => t,
         None => {
             // Unknown tool_id (e.g. added in a newer version). Try file-delete if we created it.
-            if entry.created_by_us() && entry.config_path.exists() {
+            if entry.created_by_us() && !entry.scanned && entry.config_path.exists() {
                 if let Err(e) = std::fs::remove_file(&entry.config_path) {
                     return flow::Outcome::Failed(format!(
                         "unknown tool '{}'; tried to delete config: {e:#}",
@@ -741,7 +745,7 @@ fn remove_one_harness(entry: &manifest::HarnessEntry) -> flow::Outcome {
 
     match tool.method {
         InstallMethod::FileEdit(shape) => {
-            if entry.created_by_us() {
+            if entry.created_by_us() && !entry.scanned {
                 // We created the file; delete it entirely.
                 if entry.config_path.exists() {
                     if let Err(e) = std::fs::remove_file(&entry.config_path) {
@@ -901,6 +905,7 @@ fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
                         config_path: tool.config_path.clone(),
                         backup_path: None, // not recorded; surgical removal only
                         endpoint: detect_installed_endpoint(tool).unwrap_or_default(),
+                        scanned: true,
                     });
                 } else {
                     eprintln!(
@@ -942,8 +947,16 @@ fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
         }
 
         if auto {
-            // In -y mode, remove all recorded harnesses.
-            m.harnesses.clone()
+            // -y without --harness would silently remove everything; require explicit scope.
+            eprintln!(
+                "{} -y requires --harness <id> to say what to remove.",
+                "✗".red()
+            );
+            eprintln!(
+                "  {} engrammic remove --harness claude -y",
+                "→ e.g.".dimmed()
+            );
+            std::process::exit(2);
         } else {
             println!("  {}", "(↑↓ move · space toggle · enter confirm)".dimmed());
             let selection: Vec<usize> = MultiSelect::new()
@@ -969,6 +982,7 @@ fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
                             config_path: tool.config_path.clone(),
                             backup_path: None,
                             endpoint: detect_installed_endpoint(tool).unwrap_or_default(),
+                            scanned: true,
                         }
                     }
                 })
@@ -986,15 +1000,16 @@ fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
         }
 
         if auto {
-            legacy
-                .iter()
-                .map(|t| manifest::HarnessEntry {
-                    tool_id: t.id.to_string(),
-                    config_path: t.config_path.clone(),
-                    backup_path: None,
-                    endpoint: detect_installed_endpoint(t).unwrap_or_default(),
-                })
-                .collect()
+            // -y without --harness would silently remove everything; require explicit scope.
+            eprintln!(
+                "{} -y requires --harness <id> to say what to remove.",
+                "✗".red()
+            );
+            eprintln!(
+                "  {} engrammic remove --harness claude -y",
+                "→ e.g.".dimmed()
+            );
+            std::process::exit(2);
         } else {
             let options: Vec<String> = legacy
                 .iter()
@@ -1016,6 +1031,7 @@ fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
                     config_path: legacy[i].config_path.clone(),
                     backup_path: None,
                     endpoint: detect_installed_endpoint(&legacy[i]).unwrap_or_default(),
+                    scanned: true,
                 })
                 .collect()
         }
@@ -1038,12 +1054,7 @@ fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
         if matches!(outcome, flow::Outcome::Done) {
             m.forget_harness(&entry.tool_id);
         }
-        results.push(flow::StepResult {
-            label: entry.tool_id.clone(),
-            outcome,
-        });
-
-        if also_remove_skills {
+        if also_remove_skills && matches!(outcome, flow::Outcome::Done) {
             if let Err(e) = remove_skills_for_harness(&entry.tool_id, &mut m) {
                 eprintln!(
                     "  {} skill removal for '{}' failed: {e:#}",
@@ -1052,6 +1063,10 @@ fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
                 );
             }
         }
+        results.push(flow::StepResult {
+            label: entry.tool_id.clone(),
+            outcome,
+        });
     }
 
     m.save()?;
@@ -1163,10 +1178,20 @@ fn selfhost_teardown(m: &mut manifest::Manifest, auto: bool, purge_data: bool) -
     };
 
     // ---- Confirm teardown ----
-    let should_purge = if purge_data {
-        true
+    let (_should_stop, should_purge) = if purge_data {
+        (true, true)
     } else if auto {
-        false // DEFAULT: keep data
+        // In auto mode without --purge-data, leave the stack running.
+        println!("  {}", "Self-hosted stack left running.".dimmed());
+        println!(
+            "    {}",
+            format!(
+                "→ run manually: docker compose -f {} down",
+                compose_file.display()
+            )
+            .cyan()
+        );
+        return Ok(());
     } else {
         println!();
         println!(
@@ -1198,7 +1223,7 @@ fn selfhost_teardown(m: &mut manifest::Manifest, auto: bool, purge_data: bool) -
             return Ok(());
         }
         // Second: ask about purging volumes only if user said yes to stopping.
-        if !volume_list.is_empty() {
+        let purge = if !volume_list.is_empty() {
             Confirm::new()
                 .with_prompt(format!(
                     "Also DELETE data volumes ({})? THIS IS IRREVERSIBLE.",
@@ -1208,7 +1233,8 @@ fn selfhost_teardown(m: &mut manifest::Manifest, auto: bool, purge_data: bool) -
                 .interact()?
         } else {
             false
-        }
+        };
+        (true, purge)
     };
 
     // ---- Run docker compose down ----
@@ -1325,6 +1351,7 @@ fn uninstall(auto: bool, purge_data: bool, tool_id: Option<&str>) -> Result<()> 
                     config_path: t.config_path.clone(),
                     backup_path: None,
                     endpoint: ep,
+                    scanned: true,
                 }
             })
             .collect()
@@ -1408,7 +1435,7 @@ fn uninstall(auto: bool, purge_data: bool, tool_id: Option<&str>) -> Result<()> 
 
     // ---- Manifest deletion ----
     let (done, failed, manual) = flow::summarize_results(&results);
-    if failed == 0 {
+    if failed == 0 && manual == 0 {
         // Delete the manifest file last — it is the source of truth.
         let manifest_path = manifest::Manifest::path_in(&manifest::Manifest::dir());
         if manifest_path.exists() {
@@ -1420,10 +1447,10 @@ fn uninstall(auto: bool, purge_data: bool, tool_id: Option<&str>) -> Result<()> 
             );
         }
     } else {
-        // Partial failure: keep manifest so the user can retry.
+        // Partial failure or manual steps needed: keep manifest so the user can retry.
         m.save()?;
         println!(
-            "  {} Manifest kept (some removals failed) at {}",
+            "  {} Manifest kept (some removals need a manual step or failed) at {}",
             "!".yellow(),
             manifest::Manifest::path_in(&manifest::Manifest::dir()).display()
         );

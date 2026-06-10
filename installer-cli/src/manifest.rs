@@ -13,12 +13,19 @@ pub struct HarnessEntry {
     /// Backup created before our first mutation; None if the file didn't exist.
     pub backup_path: Option<PathBuf>,
     pub endpoint: String,
+    /// True for entries synthesized from a live config scan (not recorded at
+    /// install time). Scanned files demonstrably pre-existed, so removal must
+    /// always be surgical regardless of backup_path.
+    #[serde(skip)]
+    pub scanned: bool,
 }
 
 impl HarnessEntry {
     /// True when the config file did not exist before we wrote it
     /// (backup_path is None). On removal, the file should be deleted entirely
     /// rather than surgically uninstalled — we created it, we clean it up.
+    /// Note: this is only meaningful when `scanned` is false; scanned entries
+    /// always use surgical removal regardless of backup_path.
     pub fn created_by_us(&self) -> bool {
         self.backup_path.is_none()
     }
@@ -138,6 +145,7 @@ impl Manifest {
                 config_path: config_path.to_path_buf(),
                 backup_path,
                 endpoint: endpoint.to_string(),
+                scanned: false,
             });
         }
     }
@@ -253,6 +261,7 @@ mod tests {
             config_path: "/tmp/mcp.json".into(),
             backup_path: Some("/tmp/mcp.json.engrammic.bak".into()),
             endpoint: "https://beta.engrammic.ai/mcp/".into(),
+            scanned: false,
         });
         m.skills.push(SkillEntry {
             harness: "claude".into(),
@@ -401,6 +410,7 @@ mod tests {
             config_path: PathBuf::from("/tmp/settings.json"),
             backup_path: None,
             endpoint: "https://beta.engrammic.ai/mcp/".into(),
+            scanned: false,
         };
         assert!(
             entry.created_by_us(),
@@ -412,6 +422,7 @@ mod tests {
             config_path: PathBuf::from("/tmp/other.json"),
             backup_path: Some(PathBuf::from("/tmp/other.json.engrammic.bak")),
             endpoint: "https://beta.engrammic.ai/mcp/".into(),
+            scanned: false,
         };
         assert!(
             !entry_with_backup.created_by_us(),
@@ -445,6 +456,7 @@ mod tests {
             config_path: cfg.clone(),
             backup_path: Some(bak_path.clone()),
             endpoint: "https://beta.engrammic.ai/mcp/".into(),
+            scanned: false,
         };
 
         // Surgical removal via config::uninstall.
@@ -494,6 +506,7 @@ mod tests {
             config_path: cfg.clone(),
             backup_path: None, // we created it
             endpoint: "https://beta.engrammic.ai/mcp/".into(),
+            scanned: false,
         };
 
         assert!(entry.created_by_us());

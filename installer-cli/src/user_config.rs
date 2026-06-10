@@ -60,6 +60,7 @@ mod tests {
             config_path: "/tmp/mcp.json".into(),
             backup_path: None,
             endpoint: "http://e".into(),
+            scanned: false,
         });
         m.save_in(dir.path()).unwrap();
 

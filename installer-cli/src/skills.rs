@@ -196,15 +196,6 @@ pub fn merge_skills_to_gemini(src: &Path, dest_file: &Path) -> Result<usize> {
     Ok(count)
 }
 
-/// Remove skills from a destination, dispatching on format.
-pub fn remove_skills_formatted(dest: &SkillDest) -> Result<usize> {
-    match dest.format {
-        SkillFormat::Directory => remove_skills(&dest.path),
-        SkillFormat::CursorMdc => remove_mdc_skills(&dest.path),
-        SkillFormat::GeminiMd | SkillFormat::AgentsMd => remove_gemini_skills(&dest.path),
-    }
-}
-
 /// Remove all `engrammic-*.mdc` files from dir.
 pub fn remove_mdc_skills(dir: &Path) -> Result<usize> {
     let mut count = 0;
@@ -527,7 +518,7 @@ mod tests {
         assert!(after.contains("<!-- ENGRAMMIC:START -->"));
         assert_eq!(count_skills_formatted(&dest), 1);
 
-        assert_eq!(remove_skills_formatted(&dest).unwrap(), 1);
+        assert_eq!(remove_gemini_skills(&file).unwrap(), 1);
         let cleaned = fs::read_to_string(&file).unwrap();
         assert!(cleaned.contains("# My project rules"));
         assert!(!cleaned.contains("<!-- ENGRAMMIC:START -->"));

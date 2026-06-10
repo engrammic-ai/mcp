@@ -83,7 +83,7 @@ pub fn lite(manifest: &Manifest) -> Vec<CheckResult> {
             label: "endpoint reachable".to_string(),
             ok: reachable,
             detail: if reachable {
-                "beta.engrammic.ai is up".to_string()
+                format!("{} is up", endpoint)
             } else {
                 format!(
                     "could not reach {}  →  check your internet connection",
@@ -336,6 +336,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "live network call; run explicitly with --ignored"]
     fn lite_returns_one_check_per_domain() {
         // With an empty manifest and a cloud endpoint, lite must return
         // at least the endpoint check and the harness check (zero harnesses = pass).

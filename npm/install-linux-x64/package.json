@@ -9,5 +9,6 @@
   },
   "os": ["linux"],
   "cpu": ["x64"],
+  "files": ["engrammic"],
   "bin": {}
 }
