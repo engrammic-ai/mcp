@@ -59,6 +59,29 @@ pub fn get_installed_endpoint(config_path: &Path, shape: ConfigShape) -> Option<
 }
 
 // ---------------------------------------------------------------------------
+// Backup helper
+// ---------------------------------------------------------------------------
+
+/// Create `<path>.engrammic.bak` before our first mutation of a harness config.
+/// Idempotent: an existing backup is never overwritten, so it always preserves
+/// the pre-Engrammic state. Returns None when there is nothing to back up.
+#[allow(dead_code)]
+pub fn ensure_backup(config_path: &Path) -> Result<Option<std::path::PathBuf>> {
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let mut bak = config_path.as_os_str().to_owned();
+    bak.push(".engrammic.bak");
+    let bak = std::path::PathBuf::from(bak);
+    if !bak.exists() {
+        fs::copy(config_path, &bak).with_context(|| {
+            format!("failed to back up {} to {}", config_path.display(), bak.display())
+        })?;
+    }
+    Ok(Some(bak))
+}
+
+// ---------------------------------------------------------------------------
 // JSON map shape (`{ "<container>": { "engrammic": { ... } } }`)
 // ---------------------------------------------------------------------------
 
@@ -1011,5 +1034,35 @@ approval = \"on-request\"  # inline comment
             install(&path, EP, ConfigShape::ContinueYaml).unwrap(),
             InstallResult::Unchanged
         ));
+    }
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn creates_bak_once_and_never_overwrites() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("mcp.json");
+        std::fs::write(&cfg, "{\"original\": true}").unwrap();
+
+        let bak = ensure_backup(&cfg).unwrap().expect("backup path");
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "{\"original\": true}");
+
+        // Mutate the config, call again: backup must keep the ORIGINAL content.
+        std::fs::write(&cfg, "{\"mutated\": true}").unwrap();
+        let bak2 = ensure_backup(&cfg).unwrap().expect("backup path");
+        assert_eq!(bak, bak2);
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "{\"original\": true}");
+    }
+
+    #[test]
+    fn missing_config_yields_no_backup() {
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("does-not-exist.json");
+        assert!(ensure_backup(&cfg).unwrap().is_none());
+        assert!(!dir.path().join("does-not-exist.json.engrammic.bak").exists());
     }
 }
