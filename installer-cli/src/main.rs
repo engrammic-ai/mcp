@@ -5,6 +5,7 @@ mod config;
 mod deeplink;
 mod docker;
 mod doctor;
+mod flow;
 mod license;
 mod logs;
 mod manifest;
