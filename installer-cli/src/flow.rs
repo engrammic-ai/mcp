@@ -91,7 +91,10 @@ mod tests {
     fn harness_label_marks_detected_and_configured() {
         let t = tool("claude");
         assert_eq!(harness_label(&t, true, false), "Claude Code  (detected)");
-        assert_eq!(harness_label(&t, true, true), "Claude Code  (already configured)");
+        assert_eq!(
+            harness_label(&t, true, true),
+            "Claude Code  (already configured)"
+        );
         assert_eq!(harness_label(&t, false, false), "Claude Code");
     }
 
@@ -107,15 +110,27 @@ mod tests {
         assert!(plan.contains("Claude Code"));
         assert!(plan.contains("Windsurf"));
         assert!(plan.contains("beta.engrammic.ai"));
-        assert!(plan.contains("no skills"), "empty skill dests must be stated, not omitted");
+        assert!(
+            plan.contains("no skills"),
+            "empty skill dests must be stated, not omitted"
+        );
     }
 
     #[test]
     fn summarize_results_counts_outcomes() {
         let results = vec![
-            StepResult { label: "Claude Code".into(), outcome: Outcome::Done },
-            StepResult { label: "Windsurf".into(), outcome: Outcome::Failed("permission denied".into()) },
-            StepResult { label: "Cursor".into(), outcome: Outcome::Manual("open this link".into()) },
+            StepResult {
+                label: "Claude Code".into(),
+                outcome: Outcome::Done,
+            },
+            StepResult {
+                label: "Windsurf".into(),
+                outcome: Outcome::Failed("permission denied".into()),
+            },
+            StepResult {
+                label: "Cursor".into(),
+                outcome: Outcome::Manual("open this link".into()),
+            },
         ];
         let (ok, failed, manual) = summarize_results(&results);
         assert_eq!((ok, failed, manual), (1, 1, 1));

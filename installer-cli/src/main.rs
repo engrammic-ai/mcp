@@ -36,17 +36,31 @@ fn main() -> Result<()> {
     // Detect up front so users get one clear message instead of a prompt crash.
     let interactive_command = matches!(
         cli.command,
-        Commands::Install | Commands::Update | Commands::Uninstall | Commands::Skills
-            | Commands::Selfhost | Commands::Docker | Commands::License
+        Commands::Install
+            | Commands::Update
+            | Commands::Uninstall
+            | Commands::Skills
+            | Commands::Selfhost
+            | Commands::Docker
+            | Commands::License
     );
     if interactive_command && !auto && !console::user_attended_stderr() {
-        eprintln!("{} No interactive terminal detected.", "error:".red().bold());
+        eprintln!(
+            "{} No interactive terminal detected.",
+            "error:".red().bold()
+        );
         eprintln!(
             "  Re-run with {} to auto-configure detected editors:",
             "-y".cyan()
         );
-        eprintln!("    {}", "curl -fsSL https://get.engrammic.ai/install.sh | sh -s -- -y".cyan());
-        eprintln!("  Or run {} from an interactive terminal.", "engrammic install".cyan());
+        eprintln!(
+            "    {}",
+            "curl -fsSL https://get.engrammic.ai/install.sh | sh -s -- -y".cyan()
+        );
+        eprintln!(
+            "  Or run {} from an interactive terminal.",
+            "engrammic install".cyan()
+        );
         std::process::exit(1);
     }
 
@@ -285,7 +299,10 @@ fn run_full_install(
     let selection = select_tools(auto, tool_id)?;
 
     if selection.to_install.is_empty() && selection.to_remove.is_empty() {
-        println!("{} No editors selected — nothing was changed.", "!".yellow());
+        println!(
+            "{} No editors selected — nothing was changed.",
+            "!".yellow()
+        );
         println!(
             "  Run {} anytime to configure editors.",
             "engrammic install".cyan()
@@ -398,7 +415,11 @@ fn run_full_install(
     }
     println!(
         "{} {} configured, {} need a manual step, {} failed.",
-        if failed == 0 { "✓".green() } else { "!".yellow() },
+        if failed == 0 {
+            "✓".green()
+        } else {
+            "!".yellow()
+        },
         done,
         manual,
         failed
@@ -425,7 +446,10 @@ fn select_deployment_mode(_existing_config: &user_config::UserConfig) -> Result<
         "Cloud - free tier, no setup (recommended)",
         "Self-hosted - run locally with Docker (license required)",
     ];
-    println!("  {}", "(Self-hosted requires Docker and a license key)".dimmed());
+    println!(
+        "  {}",
+        "(Self-hosted requires Docker and a license key)".dimmed()
+    );
     let idx = Select::new()
         .with_prompt("Where should Engrammic run?")
         .items(&modes)
@@ -549,9 +573,7 @@ fn remove_tool_outcome(tool: &Tool, m: &mut manifest::Manifest) -> Result<flow::
         }
         InstallMethod::DeepLink(_) => {
             println!("  {} {} - remove via app settings", "!".yellow(), tool.name);
-            Ok(flow::Outcome::Manual(
-                "remove via app settings".to_string(),
-            ))
+            Ok(flow::Outcome::Manual("remove via app settings".to_string()))
         }
         InstallMethod::PrintInstructions(hint) => {
             println!("  {} {} - remove via {}", "!".yellow(), tool.name, hint);
@@ -860,9 +882,7 @@ fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<ToolSelection> {
     let detected_ids: std::collections::HashSet<_> = detected.iter().map(|t| t.id).collect();
     let options: Vec<String> = all_tools
         .iter()
-        .map(|t| {
-            flow::harness_label(t, detected_ids.contains(t.id), installed_ids.contains(t.id))
-        })
+        .map(|t| flow::harness_label(t, detected_ids.contains(t.id), installed_ids.contains(t.id)))
         .collect();
 
     println!(
