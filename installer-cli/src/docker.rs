@@ -61,49 +61,6 @@ pub const COMPOSE_TEMPLATE: &str = include_str!("../assets/docker-compose.yml");
 pub const COMPOSE_LITE: &str = include_str!("../assets/docker-compose.lite.yml");
 pub const COMPOSE_STANDARD: &str = include_str!("../assets/docker-compose.standard.yml");
 pub const COMPOSE_PRO: &str = include_str!("../assets/docker-compose.pro.yml");
-pub const README_TEMPLATE: &str = include_str!("../assets/README.md");
-
-/// Write compose file and .env to target directory.
-pub fn write_compose_bundle(dir: &Path, license_key: &str, telemetry_enabled: bool) -> Result<()> {
-    fs::create_dir_all(dir)?;
-
-    let compose_path = dir.join("docker-compose.yml");
-    fs::write(&compose_path, COMPOSE_TEMPLATE)?;
-
-    let readme_path = dir.join("README.md");
-    fs::write(&readme_path, README_TEMPLATE)?;
-
-    let env_content = format!(
-        r#"# Engrammic Self-Hosted Configuration
-
-# Required: Your license key
-ENGRAMMIC_LICENSE_KEY={}
-
-# Database passwords (defaults work for local dev, change in production)
-POSTGRES_PASSWORD=engrammic
-# MEMGRAPH_PASSWORD=memgraph
-
-# LLM for SAGE synthesis (optional)
-# Without these, SAGE runs in passive mode (storage + recall only)
-# LLM_PROVIDER=openai
-# LLM_API_KEY=sk-...
-# LLM_MODEL=gpt-4o-mini
-
-# Embeddings (optional, uses LLM provider by default)
-# EMBEDDING_PROVIDER=openai
-# EMBEDDING_MODEL=text-embedding-3-small
-
-# Anonymous usage statistics
-TELEMETRY_ENABLED={}
-"#,
-        license_key, telemetry_enabled
-    );
-
-    let env_path = dir.join(".env");
-    fs::write(&env_path, env_content)?;
-
-    Ok(())
-}
 
 /// Check if the current compose file differs from the embedded template.
 /// Returns list of new services if template has services the current file doesn't.

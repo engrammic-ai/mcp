@@ -36,7 +36,7 @@ pub enum Commands {
     Skills,
     /// Guided self-hosted setup wizard
     Selfhost,
-    /// Install self-hosted Docker stack (legacy, use 'selfhost' instead)
+    /// Alias for 'selfhost' (kept for compatibility)
     #[command(hide = true)]
     Docker,
     /// Upgrade self-hosted Docker stack to latest version

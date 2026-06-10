@@ -39,7 +39,7 @@ fn main() -> Result<()> {
         Commands::Status => status(),
         Commands::Skills => install_skills_only(auto, cli.skill_path.as_deref()),
         Commands::Selfhost => selfhost::run_wizard(),
-        Commands::Docker => install_docker(),
+        Commands::Docker => selfhost::run_wizard(),
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
@@ -205,7 +205,10 @@ fn handle_returning_user(
         }
 
         "Start fresh (reconfigure everything)" => {
-            let endpoint = select_deployment_mode(&config)?;
+            let endpoint = match select_deployment_mode(&config)? {
+                DeploymentChoice::Cloud(ep) => ep,
+                DeploymentChoice::SelfHost => return selfhost::run_wizard(),
+            };
             run_full_install(endpoint, false, tool_id, skill_path)?;
         }
 
@@ -232,7 +235,10 @@ fn install(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Resul
             .endpoint
             .unwrap_or_else(|| CLOUD_ENDPOINT.to_string())
     } else {
-        select_deployment_mode(&existing_config)?
+        match select_deployment_mode(&existing_config)? {
+            DeploymentChoice::Cloud(ep) => ep,
+            DeploymentChoice::SelfHost => return selfhost::run_wizard(),
+        }
     };
 
     run_full_install(endpoint, auto, tool_id, skill_path)
@@ -247,7 +253,11 @@ fn run_full_install(
     let selection = select_tools(auto, tool_id)?;
 
     if selection.to_install.is_empty() && selection.to_remove.is_empty() {
-        println!("{} No harness selected.", "!".yellow());
+        println!("{} No editors selected — nothing was changed.", "!".yellow());
+        println!(
+            "  Run {} anytime to configure editors.",
+            "engrammic install".cyan()
+        );
         println!();
         println!("Add this to your MCP config manually:");
         println!();
@@ -308,191 +318,27 @@ fn run_full_install(
     Ok(())
 }
 
-fn select_deployment_mode(existing_config: &user_config::UserConfig) -> Result<String> {
+enum DeploymentChoice {
+    Cloud(String),
+    SelfHost,
+}
+
+fn select_deployment_mode(_existing_config: &user_config::UserConfig) -> Result<DeploymentChoice> {
     let modes = vec![
-        "Cloud - connect to mcp.engrammic.ai (free tier available)",
+        "Cloud - free tier, no setup (recommended)",
         "Self-hosted - run locally with Docker (license required)",
     ];
-    println!(
-        "  {}",
-        "(Self-hosted requires Docker and a license key)".dimmed()
-    );
+    println!("  {}", "(Self-hosted requires Docker and a license key)".dimmed());
     let idx = Select::new()
-        .with_prompt("Deployment mode")
+        .with_prompt("Where should Engrammic run?")
         .items(&modes)
         .default(0)
         .interact()?;
-    let mode = modes[idx];
-
-    if mode.starts_with("Self-hosted -") {
-        run_docker_setup(existing_config)
+    if idx == 1 {
+        Ok(DeploymentChoice::SelfHost)
     } else {
-        Ok(CLOUD_ENDPOINT.to_string())
+        Ok(DeploymentChoice::Cloud(CLOUD_ENDPOINT.to_string()))
     }
-}
-
-fn prompt_for_license(default: Option<&str>) -> Result<String> {
-    println!(
-        "  {}",
-        "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed()
-    );
-    let mut prompt = Input::<String>::new().with_prompt("License key (input visible)");
-
-    if let Some(key) = default {
-        prompt = prompt.default(key.to_string());
-    }
-
-    let license_key = prompt.interact_text()?;
-
-    println!("{}", "Validating license".bold());
-    match license::validate_license_format(&license_key) {
-        Ok(info) => {
-            println!(
-                "  {} Valid - customer: {}, {} days remaining",
-                "✓".green(),
-                info.customer.cyan(),
-                info.days_remaining
-            );
-            Ok(license_key)
-        }
-        Err(e) => {
-            println!("  {} {}", "✗".red(), e);
-            anyhow::bail!("Invalid license");
-        }
-    }
-}
-
-fn run_docker_setup(existing_config: &user_config::UserConfig) -> Result<String> {
-    println!();
-    println!("{}", "Checking Docker".bold());
-    if !docker::check_docker()? {
-        println!("{} Docker is not running or not installed.", "✗".red());
-        println!(
-            "  Install Docker Desktop from {} then try again.",
-            "https://docs.docker.com/get-docker/".cyan()
-        );
-        anyhow::bail!("Docker not available");
-    }
-    println!("  {} Docker is running", "✓".green());
-    println!();
-
-    let license_key = if let Some(ref key) = existing_config.license_key {
-        println!("{}", "Existing license".bold());
-        match license::validate_license_format(key) {
-            Ok(info) => {
-                println!("  Customer: {}", info.customer.cyan());
-                println!("  Days remaining: {}", info.days_remaining);
-                println!();
-
-                let keep = Confirm::new()
-                    .with_prompt("Keep this license?")
-                    .default(true)
-                    .interact()?;
-
-                if keep {
-                    key.clone()
-                } else {
-                    prompt_for_license(None)?
-                }
-            }
-            Err(e) => {
-                println!("  {} {} - needs update", "!".yellow(), e);
-                println!();
-                prompt_for_license(Some(key))?
-            }
-        }
-    } else {
-        prompt_for_license(None)?
-    };
-
-    println!();
-
-    let default_dir = user_config::UserConfig::dir();
-    let default_dir_str = default_dir.display().to_string();
-
-    println!(
-        "  {}",
-        "(Compose file and .env will be written here)".dimmed()
-    );
-    let install_dir: String = Input::new()
-        .with_prompt("Install directory")
-        .default(default_dir_str)
-        .interact_text()?;
-
-    let dir = std::path::Path::new(&install_dir);
-
-    // Telemetry consent.
-    println!(
-        "  {}",
-        "(Helps improve Engrammic. Can be changed later in .env)".dimmed()
-    );
-    let telemetry_enabled = Confirm::new()
-        .with_prompt("Share anonymous usage statistics?")
-        .default(true)
-        .interact()?;
-
-    println!("{}", "Writing compose bundle".bold());
-    docker::write_compose_bundle(dir, &license_key, telemetry_enabled)?;
-    println!(
-        "  {} {}",
-        "✓".green(),
-        dir.join("docker-compose.yml")
-            .display()
-            .to_string()
-            .dimmed()
-    );
-    println!(
-        "  {} {}",
-        "✓".green(),
-        dir.join(".env").display().to_string().dimmed()
-    );
-    println!();
-
-    println!(
-        "  {}",
-        "(Change if running on a different host/port)".dimmed()
-    );
-    let endpoint: String = Input::new()
-        .with_prompt("MCP endpoint URL")
-        .default(LOCAL_ENDPOINT.to_string())
-        .interact_text()?;
-
-    println!();
-    println!("{}", "Next steps after install completes".bold());
-    println!(
-        "  1. Review {} and set a strong POSTGRES_PASSWORD",
-        dir.join(".env").display().to_string().cyan()
-    );
-    println!(
-        "  2. Run {} to start services",
-        format!(
-            "docker compose -f {} up -d",
-            dir.join("docker-compose.yml").display()
-        )
-        .cyan()
-    );
-    println!();
-    println!("  Harnesses will be configured to use: {}", endpoint.cyan());
-    println!(
-        "  To change later: edit {} or {}",
-        user_config::UserConfig::path().display().to_string().cyan(),
-        "engrammic.url in your harness config".cyan()
-    );
-    println!();
-
-    let new_config = user_config::UserConfig {
-        endpoint: Some(endpoint.clone()),
-        license_key: Some(license_key),
-        selfhost_dir: None,
-    };
-    new_config.save()?;
-    println!(
-        "{} Saved config to {}",
-        "✓".green(),
-        user_config::UserConfig::path().display()
-    );
-
-    Ok(endpoint)
 }
 
 fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
@@ -882,181 +728,46 @@ fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<ToolSelection> {
         });
     }
 
-    // Interactive mode: pre-select detected tools AND already-installed tools.
+    // Interactive mode: label detected/configured tools; nothing pre-checked.
     let all_tools = Tool::all();
-    let options: Vec<&str> = all_tools.iter().map(|t| t.name).collect();
     let detected_ids: std::collections::HashSet<_> = detected.iter().map(|t| t.id).collect();
-    let defaults: Vec<usize> = all_tools
+    let options: Vec<String> = all_tools
         .iter()
-        .enumerate()
-        .filter(|(_, t)| detected_ids.contains(t.id) || installed_ids.contains(t.id))
-        .map(|(i, _)| i)
+        .map(|t| {
+            flow::harness_label(t, detected_ids.contains(t.id), installed_ids.contains(t.id))
+        })
         .collect();
 
     println!(
         "  {}",
-        "(↑↓ move · space toggle · enter confirm (deselect to remove))".dimmed()
+        "(↑↓ move · space toggle · enter confirm (deselect a configured one to remove))".dimmed()
     );
     let selection_indices = MultiSelect::new()
-        .with_prompt("Select harnesses to configure")
+        .with_prompt("Select editors to configure")
         .items(&options)
-        .defaults(
-            &(0..options.len())
-                .map(|i| defaults.contains(&i))
-                .collect::<Vec<_>>(),
-        )
         .interact()?;
 
-    let selected_names: std::collections::HashSet<_> =
-        selection_indices.into_iter().map(|i| options[i]).collect();
+    let selected: std::collections::HashSet<usize> = selection_indices.into_iter().collect();
 
     let to_install: Vec<Tool> = all_tools
-        .clone()
-        .into_iter()
-        .filter(|t| selected_names.contains(t.name))
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| selected.contains(i))
+        .map(|(_, t)| t.clone())
         .collect();
 
     // Tools to remove: were installed, but now deselected
     let to_remove: Vec<Tool> = all_tools
-        .into_iter()
-        .filter(|t| installed_ids.contains(t.id) && !selected_names.contains(t.name))
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| installed_ids.contains(t.id) && !selected.contains(i))
+        .map(|(_, t)| t.clone())
         .collect();
 
     Ok(ToolSelection {
         to_install,
         to_remove,
     })
-}
-
-fn install_docker() -> Result<()> {
-    banner::print_banner();
-
-    let existing_config = user_config::UserConfig::load().unwrap_or_default();
-
-    // Check Docker is available and running.
-    println!("{}", "Checking Docker".bold());
-    if !docker::check_docker()? {
-        println!("{} Docker is not running or not installed.", "✗".red());
-        println!(
-            "  Install Docker Desktop from {} then try again.",
-            "https://docs.docker.com/get-docker/".cyan()
-        );
-        return Ok(());
-    }
-    println!("  {} Docker is running", "✓".green());
-    println!();
-
-    // Prompt for license key.
-    println!(
-        "  {}",
-        "(Starts with ENGR_ - get yours at engrammic.ai/self-hosted)".dimmed()
-    );
-    let mut license_prompt = Input::<String>::new().with_prompt("License key (input visible)");
-
-    if let Some(ref key) = existing_config.license_key {
-        license_prompt = license_prompt.default(key.clone());
-    }
-
-    let license_key = license_prompt.interact_text()?;
-
-    // Validate format client-side (full validation is server-side).
-    println!("{}", "Validating license".bold());
-    match license::validate_license_format(&license_key) {
-        Ok(info) => {
-            println!(
-                "  {} Valid - customer: {}, {} days remaining",
-                "✓".green(),
-                info.customer.cyan(),
-                info.days_remaining
-            );
-        }
-        Err(e) => {
-            println!("  {} {}", "✗".red(), e);
-            return Ok(());
-        }
-    }
-    println!();
-
-    // Prompt for install directory.
-    let default_dir = user_config::UserConfig::dir();
-    let default_dir_str = default_dir.display().to_string();
-
-    println!(
-        "  {}",
-        "(Compose file and .env will be written here)".dimmed()
-    );
-    let install_dir: String = Input::new()
-        .with_prompt("Install directory")
-        .default(default_dir_str)
-        .interact_text()?;
-
-    let dir = std::path::Path::new(&install_dir);
-
-    // Telemetry consent.
-    println!(
-        "  {}",
-        "(Helps improve Engrammic. Can be changed later in .env)".dimmed()
-    );
-    let telemetry_enabled = Confirm::new()
-        .with_prompt("Share anonymous usage statistics?")
-        .default(true)
-        .interact()?;
-
-    // Write compose bundle.
-    println!("{}", "Writing compose bundle".bold());
-    docker::write_compose_bundle(dir, &license_key, telemetry_enabled)?;
-    println!(
-        "  {} {}",
-        "✓".green(),
-        dir.join("docker-compose.yml")
-            .display()
-            .to_string()
-            .dimmed()
-    );
-    println!(
-        "  {} {}",
-        "✓".green(),
-        dir.join(".env").display().to_string().dimmed()
-    );
-    println!();
-
-    // Save config.
-    let existing = user_config::UserConfig::load().unwrap_or_default();
-    let new_config = user_config::UserConfig {
-        endpoint: Some(LOCAL_ENDPOINT.to_string()),
-        license_key: Some(license_key),
-        selfhost_dir: existing.selfhost_dir,
-    };
-    new_config.save()?;
-    println!(
-        "{} Saved config to {}",
-        "✓".green(),
-        user_config::UserConfig::path().display()
-    );
-    println!();
-
-    // Print next steps.
-    println!("{}", "Next steps".bold());
-    println!(
-        "  1. Review {} and set a strong POSTGRES_PASSWORD",
-        dir.join(".env").display().to_string().cyan()
-    );
-    println!(
-        "  2. Run {} to start all services",
-        format!(
-            "docker compose -f {} up -d",
-            dir.join("docker-compose.yml").display()
-        )
-        .cyan()
-    );
-    println!(
-        "  3. MCP endpoint will be available at {}",
-        LOCAL_ENDPOINT.cyan()
-    );
-    println!();
-    println!("Run {} to configure your harness.", "engrammic".cyan());
-
-    Ok(())
 }
 
 fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
@@ -1101,7 +812,8 @@ fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
                     tools::SkillScope::User => "(user)",
                     tools::SkillScope::Project => "(project)",
                 };
-                format!("{:<25} {}", d.name, scope.dimmed())
+                let detected = if d.default { "  (detected)" } else { "" };
+                format!("{:<25} {}{}", d.name, scope.dimmed(), detected.dimmed())
             })
             .collect();
 
@@ -1189,30 +901,16 @@ fn install_skills_only(auto: bool, skill_path: Option<&str>) -> Result<()> {
                     tools::SkillScope::User => "(user)",
                     tools::SkillScope::Project => "(project)",
                 };
-                format!("{:<25} {}", d.name, scope.dimmed())
+                let detected = if d.default { "  (detected)" } else { "" };
+                format!("{:<25} {}{}", d.name, scope.dimmed(), detected.dimmed())
             })
             .collect();
 
-        let defaults: Vec<usize> = all_dests
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| d.default)
-            .map(|(i, _)| i)
-            .collect();
-
-        println!(
-            "  {}",
-            "(↑↓ move · space toggle · enter confirm (detected tools pre-selected))".dimmed()
-        );
+        println!("  {}", "(↑↓ move · space toggle · enter confirm)".dimmed());
         let options_strs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
         let picked_indices = MultiSelect::new()
             .with_prompt("Install skills to")
             .items(&options_strs)
-            .defaults(
-                &(0..options.len())
-                    .map(|i| defaults.contains(&i))
-                    .collect::<Vec<_>>(),
-            )
             .interact()?;
 
         all_dests
@@ -1225,6 +923,10 @@ fn install_skills_only(auto: bool, skill_path: Option<&str>) -> Result<()> {
 
     if chosen.is_empty() {
         println!("{} No skill destination selected.", "!".yellow());
+        println!(
+            "  Run {} anytime to install them.",
+            "engrammic skills".cyan()
+        );
         return Ok(());
     }
 

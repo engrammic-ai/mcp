@@ -17,11 +17,6 @@ impl UserConfig {
         Manifest::dir()
     }
 
-    /// Path shown to users in messages; now the manifest file.
-    pub fn path() -> PathBuf {
-        Manifest::path_in(&Self::dir())
-    }
-
     pub fn load() -> Result<Self> {
         Self::load_in(&Self::dir())
     }
