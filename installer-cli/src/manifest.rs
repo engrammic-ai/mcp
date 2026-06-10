@@ -28,7 +28,7 @@ pub struct SkillEntry {
 
 /// Single source of truth for everything the installer has done on this machine.
 /// Stored at ~/.engrammic/state.toml; written atomically (tmp + rename).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub schema_version: u32,
     #[serde(default)]
@@ -95,12 +95,17 @@ impl Manifest {
         fs::create_dir_all(dir)
             .with_context(|| format!("failed to create {}", dir.display()))?;
         let path = Self::path_in(dir);
-        let tmp = dir.join("state.toml.tmp");
+        let tmp = dir.join(format!("state.toml.{}.tmp", std::process::id()));
         let content = toml::to_string_pretty(self).context("failed to serialize manifest")?;
         fs::write(&tmp, content)
             .with_context(|| format!("failed to write {}", tmp.display()))?;
-        fs::rename(&tmp, &path)
-            .with_context(|| format!("failed to move manifest into place at {}", path.display()))
+        if let Err(e) = fs::rename(&tmp, &path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e).with_context(|| {
+                format!("failed to move manifest into place at {}", path.display())
+            });
+        }
+        Ok(())
     }
 }
 
@@ -151,7 +156,11 @@ mod tests {
         let m = Manifest::default();
         m.save_in(dir.path()).unwrap();
         assert!(dir.path().join("state.toml").exists());
-        assert!(!dir.path().join("state.toml.tmp").exists());
+        let leftover_tmp = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().extension().is_some_and(|ext| ext == "tmp"));
+        assert!(!leftover_tmp, "no .tmp file may remain after save");
     }
 
     #[test]
