@@ -1,49 +1,86 @@
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use anyhow::Result;
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+use crate::manifest::Manifest;
+
+/// Thin view over the manifest for the three legacy fields.
+/// Kept so existing call sites compile unchanged; storage lives in state.toml.
+#[derive(Debug, Default)]
 pub struct UserConfig {
-    #[serde(default)]
     pub endpoint: Option<String>,
-    #[serde(default)]
     pub license_key: Option<String>,
-    #[serde(default)]
     pub selfhost_dir: Option<PathBuf>,
 }
 
 impl UserConfig {
     pub fn dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("~"))
-            .join(".engrammic")
+        Manifest::dir()
     }
 
+    /// Path shown to users in messages; now the manifest file.
     pub fn path() -> PathBuf {
-        Self::dir().join("config.toml")
+        Manifest::path_in(&Self::dir())
     }
 
     pub fn load() -> Result<Self> {
-        let path = Self::path();
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("failed to parse {}", path.display()))
+        Self::load_in(&Self::dir())
+    }
+
+    pub fn load_in(dir: &Path) -> Result<Self> {
+        let m = Manifest::load_or_migrate_in(dir)?;
+        Ok(Self {
+            endpoint: m.endpoint,
+            license_key: m.license_key,
+            selfhost_dir: m.selfhost_dir,
+        })
     }
 
     pub fn save(&self) -> Result<()> {
-        let dir = Self::dir();
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("failed to create {}", dir.display()))?;
+        self.save_in(&Self::dir())
+    }
 
-        let path = Self::path();
-        let content = toml::to_string_pretty(self)
-            .context("failed to serialize config")?;
-        fs::write(&path, content)
-            .with_context(|| format!("failed to write {}", path.display()))
+    /// Merge these fields into the manifest without touching harness/skill entries.
+    pub fn save_in(&self, dir: &Path) -> Result<()> {
+        let mut m = Manifest::load_or_migrate_in(dir)?;
+        m.endpoint = self.endpoint.clone();
+        m.license_key = self.license_key.clone();
+        m.selfhost_dir = self.selfhost_dir.clone();
+        m.save_in(dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::Manifest;
+    use tempfile::tempdir;
+
+    #[test]
+    fn save_in_writes_through_to_manifest_preserving_entries() {
+        let dir = tempdir().unwrap();
+        // Pre-existing manifest with a harness entry that must survive.
+        let mut m = Manifest::default();
+        m.harnesses.push(crate::manifest::HarnessEntry {
+            tool_id: "cursor".into(),
+            config_path: "/tmp/mcp.json".into(),
+            backup_path: None,
+            endpoint: "http://e".into(),
+        });
+        m.save_in(dir.path()).unwrap();
+
+        let cfg = UserConfig {
+            endpoint: Some("http://new".into()),
+            license_key: Some("eng_k".into()),
+            selfhost_dir: None,
+        };
+        cfg.save_in(dir.path()).unwrap();
+
+        let m = Manifest::load_in(dir.path()).unwrap();
+        assert_eq!(m.endpoint.as_deref(), Some("http://new"));
+        assert_eq!(m.license_key.as_deref(), Some("eng_k"));
+        assert_eq!(m.harnesses.len(), 1, "save() must not clobber manifest entries");
+
+        let loaded = UserConfig::load_in(dir.path()).unwrap();
+        assert_eq!(loaded.endpoint.as_deref(), Some("http://new"));
     }
 }
