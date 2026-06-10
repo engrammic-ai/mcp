@@ -7,6 +7,7 @@ mod docker;
 mod doctor;
 mod license;
 mod logs;
+mod manifest;
 mod scale;
 mod selfhost;
 mod skill_format;
