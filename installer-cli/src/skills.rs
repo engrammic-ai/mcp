@@ -817,6 +817,113 @@ mod tests {
         assert_eq!(removed, 0);
     }
 
+    // ---- Task 7 Step 4: named unit tests for the three skill-removal functions ----
+
+    /// remove_skills: removes every directory whose name starts with "engrammic-" and
+    /// leaves non-prefixed directories untouched.  The path argument is the *parent
+    /// directory* that contains the skill subdirectories (not a skill dir itself).
+    /// Returns the count of removed directories.
+    #[test]
+    fn remove_skills_deletes_engrammic_dirs() {
+        let dir = tempdir().unwrap();
+        // Two engrammic skill dirs and some noise that must survive.
+        make_skill(dir.path(), "engrammic-recall");
+        make_skill(dir.path(), "engrammic-reflect");
+        make_skill(dir.path(), "keep-this-dir");
+        fs::write(dir.path().join("engrammic-not-a-dir.txt"), "file").unwrap();
+
+        let removed = remove_skills(dir.path()).unwrap();
+
+        // Only the two prefixed *directories* are deleted.
+        assert_eq!(removed, 2);
+        assert!(!dir.path().join("engrammic-recall").exists());
+        assert!(!dir.path().join("engrammic-reflect").exists());
+        // Non-prefixed dir is preserved.
+        assert!(dir.path().join("keep-this-dir").exists());
+        // A file with the prefix is NOT deleted (function filters by is_dir()).
+        assert!(dir.path().join("engrammic-not-a-dir.txt").exists());
+    }
+
+    /// remove_skills on a missing/unreadable directory returns Ok(0) rather than an error.
+    #[test]
+    fn remove_skills_missing_dir_returns_zero() {
+        let removed = remove_skills(std::path::Path::new("/no/such/dir")).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    /// remove_mdc_skills: removes files matching "engrammic-*.mdc" from the given directory.
+    /// Files with the right prefix but wrong extension, and files with the right extension but
+    /// wrong prefix, are both preserved.  Returns the count of deleted files.
+    #[test]
+    fn remove_mdc_skills_deletes_engrammic_mdc_files() {
+        let dir = tempdir().unwrap();
+        // Files that should be removed.
+        fs::write(dir.path().join("engrammic-recall.mdc"), "mdc content").unwrap();
+        fs::write(dir.path().join("engrammic-learn.mdc"), "mdc content").unwrap();
+        // Files that must survive.
+        fs::write(dir.path().join("other-rule.mdc"), "keep").unwrap();
+        fs::write(dir.path().join("engrammic-keep.txt"), "keep").unwrap();
+        fs::write(dir.path().join("README.md"), "keep").unwrap();
+
+        let removed = remove_mdc_skills(dir.path()).unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(!dir.path().join("engrammic-recall.mdc").exists());
+        assert!(!dir.path().join("engrammic-learn.mdc").exists());
+        assert!(dir.path().join("other-rule.mdc").exists());
+        assert!(dir.path().join("engrammic-keep.txt").exists());
+        assert!(dir.path().join("README.md").exists());
+    }
+
+    /// remove_gemini_skills: the path argument is a *file* (e.g. GEMINI.md or AGENTS.md),
+    /// not a directory.  The function strips the region delimited by
+    /// "<!-- ENGRAMMIC:START -->" … "<!-- ENGRAMMIC:END -->" and rewrites the file.
+    /// Returns 1 when markers were found and the file was rewritten, 0 otherwise.
+    /// User content outside the markers is preserved exactly.
+    #[test]
+    fn remove_gemini_skills_removes_markers() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        let user_content = "# Project Rules\nDo the thing.\n";
+        let engrammic_block =
+            "<!-- ENGRAMMIC:START -->\n## engrammic-recall\nBody text.\n<!-- ENGRAMMIC:END -->\n";
+        fs::write(&file, format!("{}{}", user_content, engrammic_block)).unwrap();
+
+        let result = remove_gemini_skills(&file).unwrap();
+
+        // Exactly one section was found and removed.
+        assert_eq!(result, 1);
+        let after = fs::read_to_string(&file).unwrap();
+        // Engrammic markers and content are gone.
+        assert!(!after.contains("<!-- ENGRAMMIC:START -->"));
+        assert!(!after.contains("<!-- ENGRAMMIC:END -->"));
+        assert!(!after.contains("engrammic-recall"));
+        // User content is preserved.
+        assert!(after.contains("# Project Rules"));
+        assert!(after.contains("Do the thing."));
+    }
+
+    /// remove_gemini_skills returns 0 (not an error) when the file has no Engrammic markers.
+    #[test]
+    fn remove_gemini_skills_no_markers_is_zero() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("GEMINI.md");
+        fs::write(&file, "# Rules\nUser content only.").unwrap();
+
+        let result = remove_gemini_skills(&file).unwrap();
+        assert_eq!(result, 0);
+        // File is unchanged.
+        let after = fs::read_to_string(&file).unwrap();
+        assert_eq!(after, "# Rules\nUser content only.");
+    }
+
+    /// remove_gemini_skills returns 0 (not an error) when the target file does not exist.
+    #[test]
+    fn remove_gemini_skills_missing_file_is_zero() {
+        let result = remove_gemini_skills(std::path::Path::new("/no/such/GEMINI.md")).unwrap();
+        assert_eq!(result, 0);
+    }
+
     #[test]
     fn gemini_roundtrip_install_remove() {
         let src = tempdir().unwrap();

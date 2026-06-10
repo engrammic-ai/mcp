@@ -37,7 +37,8 @@ fn main() -> Result<()> {
         cli.command,
         Commands::Install
             | Commands::Update
-            | Commands::Uninstall
+            | Commands::Uninstall { .. }
+            | Commands::Remove { .. }
             | Commands::Skills
             | Commands::Selfhost
             | Commands::Docker
@@ -66,7 +67,8 @@ fn main() -> Result<()> {
     let result = match cli.command {
         Commands::Install => install(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
         Commands::Update => update(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
-        Commands::Uninstall => uninstall(auto, cli.tool.as_deref()),
+        Commands::Remove { harness } => remove(auto, &harness),
+        Commands::Uninstall { purge_data } => uninstall(auto, purge_data, cli.tool.as_deref()),
         Commands::Status => status(),
         Commands::Skills => install_skills_only(auto, cli.skill_path.as_deref()),
         Commands::Selfhost => selfhost::run_wizard(),
@@ -439,6 +441,21 @@ fn run_full_install(
         failed
     );
 
+    // ---- Doctor-lite auto-run ----
+    // Re-use the manifest already in scope (endpoint just saved into it above).
+    let checks = doctor::lite(&m);
+    println!();
+    println!("{}", "Verification".bold());
+    for c in &checks {
+        if c.ok {
+            println!("  {} {:<28} {}", "✓".green(), c.label, c.detail.dimmed());
+        } else {
+            println!("  {} {:<28} {}", "✗".red(), c.label, c.detail.yellow());
+        }
+    }
+    let all_ok = checks.iter().all(|c| c.ok);
+
+    // ---- End-of-install message ----
     println!();
     println!(
         "Done. Tools available: {}",
@@ -446,6 +463,27 @@ fn run_full_install(
     );
     print_restart_reminder();
     println!();
+    println!(
+        "  {} {}",
+        "Docs:".dimmed(),
+        "https://docs.engrammic.ai".cyan()
+    );
+    println!();
+    println!("  {}", "Try it out — ask your agent:".bold());
+    println!(
+        "    {}",
+        r#""Remember that the API base URL is https://api.example.com""#.cyan()
+    );
+    println!();
+    if !all_ok {
+        println!(
+            "  {} Run {} for more details.",
+            "!".yellow(),
+            "engrammic doctor".cyan()
+        );
+        println!();
+    }
+
     // The install script owns persistence (~/.local/bin); no self-copy here.
     if let Ok(exe) = std::env::current_exe() {
         println!(
@@ -613,48 +651,844 @@ fn remove_tool_outcome(tool: &Tool, m: &mut manifest::Manifest) -> Result<flow::
     }
 }
 
-fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
-    banner::print_banner();
+// ---------------------------------------------------------------------------
+// Phase 3: legacy_scan + print_manual_removal_hints
+// ---------------------------------------------------------------------------
 
-    let selection = select_tools(auto, tool_id)?;
-    // For uninstall, we remove everything that was selected
-    let tools_to_remove = if selection.to_install.is_empty() {
-        // Nothing selected means remove all installed
-        Tool::all()
-            .into_iter()
-            .filter(|t| detect_installed_endpoint(t).is_some())
-            .collect::<Vec<_>>()
-    } else {
-        selection.to_install
+/// Scan all FileEdit-shape harnesses for an installed Engrammic entry.
+///
+/// Scope: FileEdit shapes only. DeepLink (VS Code, Cursor) and
+/// PrintInstructions (JetBrains AI, Trae) harnesses cannot be read back via
+/// config::get_installed_endpoint (no stable file path or no file-edit at all).
+/// Those are surfaced as "remove manually" guidance via print_manual_removal_hints.
+///
+/// Returns only tools where our server key is present in the config file.
+fn legacy_scan() -> Vec<Tool> {
+    tools::Tool::all()
+        .into_iter()
+        .filter(|tool| {
+            matches!(tool.method, InstallMethod::FileEdit(_))
+                && detect_installed_endpoint(tool).is_some()
+        })
+        .collect()
+}
+
+/// Print manual-removal guidance for harnesses we cannot programmatically uninstall.
+/// Called after the automated removal loop so it appears in the output summary.
+fn print_manual_removal_hints() {
+    let manual_tools: Vec<_> = tools::Tool::all()
+        .into_iter()
+        .filter(|t| {
+            matches!(
+                t.method,
+                InstallMethod::DeepLink(_) | InstallMethod::PrintInstructions(_)
+            ) && t.config_path.exists()
+        })
+        .collect();
+
+    if manual_tools.is_empty() {
+        return;
+    }
+
+    println!();
+    println!(
+        "  {} The following editors require manual removal (not configurable via files):",
+        "▸".cyan()
+    );
+    for tool in &manual_tools {
+        let hint = match &tool.method {
+            InstallMethod::DeepLink(DeepLinkKind::VsCode) => {
+                "VS Code: Settings > MCP > remove 'engrammic'"
+            }
+            InstallMethod::DeepLink(DeepLinkKind::Cursor) => {
+                "Cursor: Cursor Settings > MCP > remove 'engrammic'"
+            }
+            InstallMethod::PrintInstructions(h) => h,
+            _ => unreachable!(),
+        };
+        println!("    {} {}: {}", "→".dimmed(), tool.name, hint);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: remove_one_harness, remove_skills_for_harness, ask_remove_skills
+// ---------------------------------------------------------------------------
+
+/// Remove Engrammic from a single harness. Returns the flow Outcome.
+/// Does NOT save the manifest — caller owns load/save.
+fn remove_one_harness(entry: &manifest::HarnessEntry) -> flow::Outcome {
+    // Find the Tool for shape dispatch.
+    let tool = match tools::Tool::from_id(&entry.tool_id) {
+        Some(t) => t,
+        None => {
+            // Unknown tool_id (e.g. added in a newer version). Try file-delete if we created it.
+            if entry.created_by_us() && entry.config_path.exists() {
+                if let Err(e) = std::fs::remove_file(&entry.config_path) {
+                    return flow::Outcome::Failed(format!(
+                        "unknown tool '{}'; tried to delete config: {e:#}",
+                        entry.tool_id
+                    ));
+                }
+                return flow::Outcome::Done;
+            }
+            return flow::Outcome::Failed(format!(
+                "unknown tool id '{}' — remove manually from {}",
+                entry.tool_id,
+                entry.config_path.display()
+            ));
+        }
     };
+
+    match tool.method {
+        InstallMethod::FileEdit(shape) => {
+            if entry.created_by_us() {
+                // We created the file; delete it entirely.
+                if entry.config_path.exists() {
+                    if let Err(e) = std::fs::remove_file(&entry.config_path) {
+                        return flow::Outcome::Failed(format!(
+                            "failed to delete {}: {e:#}",
+                            entry.config_path.display()
+                        ));
+                    }
+                }
+                // Backup is intentionally left on disk.
+                // (backup_path is None when created_by_us() is true, so nothing to print)
+                flow::Outcome::Done
+            } else {
+                // Pre-existing file: surgical removal only.
+                match config::uninstall(&entry.config_path, shape) {
+                    Ok(()) => {
+                        // Backup left intentionally; print a note.
+                        if let Some(ref bak) = entry.backup_path {
+                            println!(
+                                "  {} Backup left at {} (delete manually if not needed)",
+                                "·".dimmed(),
+                                bak.display()
+                            );
+                        }
+                        flow::Outcome::Done
+                    }
+                    Err(e) => flow::Outcome::Failed(format!("{e:#}")),
+                }
+            }
+        }
+        InstallMethod::DeepLink(kind) => {
+            let hint = match kind {
+                DeepLinkKind::VsCode => "Settings > MCP > remove 'engrammic'",
+                DeepLinkKind::Cursor => "Cursor Settings > MCP > remove 'engrammic'",
+            };
+            println!(
+                "  {} {} — {}",
+                "▸".cyan(),
+                tool.name,
+                format!("remove manually: {hint}").dimmed()
+            );
+            flow::Outcome::Manual(hint.to_string())
+        }
+        InstallMethod::PrintInstructions(hint) => {
+            println!(
+                "  {} {} — {}",
+                "▸".cyan(),
+                tool.name,
+                format!("remove manually via {hint}").dimmed()
+            );
+            flow::Outcome::Manual(hint.to_string())
+        }
+    }
+}
+
+/// Remove all skills associated with a particular harness (tool_id).
+/// Returns the number of skill destinations processed.
+fn remove_skills_for_harness(harness_id: &str, m: &mut manifest::Manifest) -> Result<usize> {
+    let to_remove: Vec<manifest::SkillEntry> = m
+        .skills
+        .iter()
+        .filter(|s| s.harness == harness_id)
+        .cloned()
+        .collect();
+
+    let mut count = 0;
+    for skill in &to_remove {
+        let format = match skill.format.as_str() {
+            "directory" => tools::SkillFormat::Directory,
+            "cursor-mdc" => tools::SkillFormat::CursorMdc,
+            "gemini-md" => tools::SkillFormat::GeminiMd,
+            "agents-md" => tools::SkillFormat::AgentsMd,
+            other => {
+                eprintln!(
+                    "  {} unknown skill format '{}' for {} — skipped",
+                    "!".yellow(),
+                    other,
+                    skill.path.display()
+                );
+                continue;
+            }
+        };
+        // Dispatch directly on format rather than constructing a synthetic SkillDest
+        // (SkillDest.name/harness are &'static str; can't be constructed from heap Strings).
+        let removed = match format {
+            tools::SkillFormat::Directory => skills::remove_skills(&skill.path)?,
+            tools::SkillFormat::CursorMdc => skills::remove_mdc_skills(&skill.path)?,
+            tools::SkillFormat::GeminiMd | tools::SkillFormat::AgentsMd => {
+                skills::remove_gemini_skills(&skill.path)?
+            }
+        };
+        if removed > 0 {
+            println!(
+                "  {} Removed {} skill(s) from {}",
+                "✓".green(),
+                removed,
+                skill.path.display()
+            );
+        }
+        m.forget_skill(&skill.path);
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Ask the user whether to also remove skills for the chosen harnesses.
+/// In auto mode, defaults to removing skills.
+fn ask_remove_skills(harness_names: &[&str], auto: bool) -> Result<bool> {
+    if harness_names.is_empty() {
+        return Ok(false);
+    }
+    if auto {
+        return Ok(true);
+    }
+    let names = harness_names.join(", ");
+    Confirm::new()
+        .with_prompt(format!("Also remove skills installed for {}?", names))
+        .default(true)
+        .interact()
+        .map_err(Into::into)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: remove subcommand
+// ---------------------------------------------------------------------------
+
+/// `engrammic remove [--harness <id>…]`
+///
+/// Interactive multi-select when no --harness flags are given. Removes the MCP
+/// entry from chosen harnesses (and optionally their skills). Manifest-driven
+/// when entries exist; falls back to legacy scan for unrecorded harnesses.
+fn remove(auto: bool, harness_ids: &[String]) -> Result<()> {
+    banner::print_banner();
 
     let mut m = manifest::Manifest::load_or_migrate(None)?;
 
-    for tool in &tools_to_remove {
-        match remove_tool_outcome(tool, &mut m) {
-            Ok(flow::Outcome::Done) => {
-                println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
+    // ---- Determine which harnesses to act on ----
+    let targets: Vec<manifest::HarnessEntry> = if !harness_ids.is_empty() {
+        // Flag-driven: validate all requested ids exist in manifest.
+        let mut entries = Vec::new();
+        let mut unknown = Vec::new();
+        for id in harness_ids {
+            if let Some(e) = m.harnesses.iter().find(|e| &e.tool_id == id) {
+                entries.push(e.clone());
+            } else {
+                unknown.push(id.as_str());
             }
-            Ok(_) => {} // Manual outcomes already printed inside remove_tool_outcome
-            Err(e) => {
-                println!("  {} {} — {}", "✗".red(), tool.name, e);
+        }
+        if !unknown.is_empty() {
+            // Not in manifest; try legacy scan for these specific ids.
+            let legacy = legacy_scan();
+            for id in &unknown {
+                if let Some(tool) = legacy.iter().find(|t| t.id == *id) {
+                    // Synthesize a HarnessEntry from the live scan.
+                    entries.push(manifest::HarnessEntry {
+                        tool_id: tool.id.to_string(),
+                        config_path: tool.config_path.clone(),
+                        backup_path: None, // not recorded; surgical removal only
+                        endpoint: detect_installed_endpoint(tool).unwrap_or_default(),
+                    });
+                } else {
+                    eprintln!(
+                        "  {} '{}' not found in manifest or installed config — skipped",
+                        "!".yellow(),
+                        id
+                    );
+                }
+            }
+        }
+        entries
+    } else if !m.harnesses.is_empty() {
+        // Interactive multi-select over manifest-known harnesses.
+        // Also include detected-but-unrecorded harnesses from legacy scan.
+        let legacy = legacy_scan();
+        let recorded_ids: std::collections::HashSet<_> =
+            m.harnesses.iter().map(|e| e.tool_id.as_str()).collect();
+        let unrecorded: Vec<_> = legacy
+            .iter()
+            .filter(|t| !recorded_ids.contains(t.id))
+            .collect();
+
+        let mut options: Vec<String> = m
+            .harnesses
+            .iter()
+            .map(|e| {
+                tools::Tool::from_id(&e.tool_id)
+                    .map(|t| format!("{} (recorded)", t.name))
+                    .unwrap_or_else(|| format!("{} (recorded)", e.tool_id))
+            })
+            .collect();
+        for t in &unrecorded {
+            options.push(format!("{} (detected, not in manifest)", t.name));
+        }
+
+        if options.is_empty() {
+            println!("{}", "No Engrammic harnesses found to remove.".dimmed());
+            return Ok(());
+        }
+
+        if auto {
+            // In -y mode, remove all recorded harnesses.
+            m.harnesses.clone()
+        } else {
+            println!("  {}", "(↑↓ move · space toggle · enter confirm)".dimmed());
+            let selection: Vec<usize> = MultiSelect::new()
+                .with_prompt("Select editors to remove Engrammic from")
+                .items(&options)
+                .interact()?;
+
+            if selection.is_empty() {
+                println!("{}", "Nothing selected — nothing was changed.".dimmed());
+                return Ok(());
+            }
+
+            let n_recorded = m.harnesses.len();
+            selection
+                .into_iter()
+                .map(|i| {
+                    if i < n_recorded {
+                        m.harnesses[i].clone()
+                    } else {
+                        let tool = unrecorded[i - n_recorded];
+                        manifest::HarnessEntry {
+                            tool_id: tool.id.to_string(),
+                            config_path: tool.config_path.clone(),
+                            backup_path: None,
+                            endpoint: detect_installed_endpoint(tool).unwrap_or_default(),
+                        }
+                    }
+                })
+                .collect()
+        }
+    } else {
+        // No manifest entries — pure legacy scan.
+        let legacy = legacy_scan();
+        if legacy.is_empty() {
+            println!(
+                "{}",
+                "No Engrammic installations detected. Nothing to remove.".dimmed()
+            );
+            return Ok(());
+        }
+
+        if auto {
+            legacy
+                .iter()
+                .map(|t| manifest::HarnessEntry {
+                    tool_id: t.id.to_string(),
+                    config_path: t.config_path.clone(),
+                    backup_path: None,
+                    endpoint: detect_installed_endpoint(t).unwrap_or_default(),
+                })
+                .collect()
+        } else {
+            let options: Vec<String> = legacy
+                .iter()
+                .map(|t| format!("{} (detected)", t.name))
+                .collect();
+            println!("  {}", "(↑↓ move · space toggle · enter confirm)".dimmed());
+            let selection: Vec<usize> = MultiSelect::new()
+                .with_prompt("Select editors to remove Engrammic from")
+                .items(&options)
+                .interact()?;
+            if selection.is_empty() {
+                println!("{}", "Nothing selected — nothing was changed.".dimmed());
+                return Ok(());
+            }
+            selection
+                .into_iter()
+                .map(|i| manifest::HarnessEntry {
+                    tool_id: legacy[i].id.to_string(),
+                    config_path: legacy[i].config_path.clone(),
+                    backup_path: None,
+                    endpoint: detect_installed_endpoint(&legacy[i]).unwrap_or_default(),
+                })
+                .collect()
+        }
+    };
+
+    if targets.is_empty() {
+        println!("{}", "Nothing selected — nothing was changed.".dimmed());
+        return Ok(());
+    }
+
+    // ---- Ask about skills (once, for all selected harnesses) ----
+    let harness_names: Vec<&str> = targets.iter().map(|e| e.tool_id.as_str()).collect();
+    let also_remove_skills = ask_remove_skills(&harness_names, auto)?;
+
+    // ---- Execute ----
+    let mut results: Vec<flow::StepResult> = Vec::new();
+
+    for entry in &targets {
+        let outcome = remove_one_harness(entry);
+        if matches!(outcome, flow::Outcome::Done) {
+            m.forget_harness(&entry.tool_id);
+        }
+        results.push(flow::StepResult {
+            label: entry.tool_id.clone(),
+            outcome,
+        });
+
+        if also_remove_skills {
+            if let Err(e) = remove_skills_for_harness(&entry.tool_id, &mut m) {
+                eprintln!(
+                    "  {} skill removal for '{}' failed: {e:#}",
+                    "!".yellow(),
+                    entry.tool_id
+                );
             }
         }
     }
 
-    for dest in SkillDest::all() {
-        let removed = skills::remove_skills_formatted(&dest)?;
-        if removed > 0 {
-            println!(
-                "{} Removed {} skills from {}",
-                "✓".green(),
-                removed,
-                dest.path.display()
-            );
-            m.forget_skill(&dest.path);
+    m.save()?;
+
+    // ---- Summary ----
+    println!();
+    let (done, failed, manual) = flow::summarize_results(&results);
+    for r in &results {
+        match &r.outcome {
+            flow::Outcome::Done => {
+                println!("  {} {} removed", "✓".green(), r.label);
+            }
+            flow::Outcome::Failed(msg) => {
+                println!("  {} {} — {}", "✗".red(), r.label, msg);
+                println!(
+                    "    {} {}",
+                    "→".dimmed(),
+                    format!("retry: engrammic remove --harness {}", r.label).cyan()
+                );
+            }
+            flow::Outcome::Manual(_) => {} // already printed in remove_one_harness
         }
     }
-    m.save()?;
+
+    print_manual_removal_hints();
+
+    println!(
+        "{} {} removed, {} need a manual step, {} failed.",
+        if failed == 0 {
+            "✓".green()
+        } else {
+            "!".yellow()
+        },
+        done,
+        manual,
+        failed
+    );
+    if failed == 0 && manual == 0 {
+        println!(
+            "  {}",
+            "Run 'engrammic install' anytime to re-configure.".dimmed()
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: selfhost_teardown
+// ---------------------------------------------------------------------------
+
+fn selfhost_teardown(m: &mut manifest::Manifest, auto: bool, purge_data: bool) -> Result<()> {
+    let install_dir = match &m.selfhost_dir {
+        Some(d) => d.clone(),
+        None => return Ok(()), // nothing to tear down
+    };
+
+    let compose_file = install_dir.join("docker-compose.yml");
+    if !compose_file.exists() {
+        println!(
+            "  {} Self-hosted compose file not found at {} — skipped",
+            "!".yellow(),
+            compose_file.display()
+        );
+        return Ok(());
+    }
+
+    // ---- List exact volume names before asking ----
+    // `docker compose -f <file> config --volumes` emits one volume name per line.
+    let volume_list: Vec<String> = {
+        let out = std::process::Command::new("docker")
+            .args([
+                "compose",
+                "-f",
+                &compose_file.to_string_lossy(),
+                "config",
+                "--volumes",
+            ])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                println!(
+                    "  {} Could not list Docker volumes: {}",
+                    "!".yellow(),
+                    stderr.trim()
+                );
+                vec![]
+            }
+            Err(e) => {
+                println!("  {} docker not found or not runnable: {e:#}", "!".yellow());
+                println!(
+                    "    {}",
+                    format!(
+                        "→ run manually: docker compose -f {} down{}",
+                        compose_file.display(),
+                        if purge_data { " -v" } else { "" }
+                    )
+                    .cyan()
+                );
+                return Ok(());
+            }
+        }
+    };
+
+    // ---- Confirm teardown ----
+    let should_purge = if purge_data {
+        true
+    } else if auto {
+        false // DEFAULT: keep data
+    } else {
+        println!();
+        println!(
+            "  {} Self-hosted stack found at {}",
+            "·".dimmed(),
+            install_dir.display()
+        );
+        if !volume_list.is_empty() {
+            println!(
+                "  {} Docker volumes that would be deleted with --purge-data:",
+                "·".dimmed()
+            );
+            for v in &volume_list {
+                println!("      {}", v.cyan());
+            }
+        }
+        // First: ask about stopping the stack.
+        let stop = Confirm::new()
+            .with_prompt(
+                "Stop the self-hosted Docker stack? (data volumes are KEPT unless you confirm below)",
+            )
+            .default(true)
+            .interact()?;
+        if !stop {
+            println!(
+                "  {}",
+                "Self-hosted stack left running. Run 'engrammic selfhost' to manage it.".dimmed()
+            );
+            return Ok(());
+        }
+        // Second: ask about purging volumes only if user said yes to stopping.
+        if !volume_list.is_empty() {
+            Confirm::new()
+                .with_prompt(format!(
+                    "Also DELETE data volumes ({})? THIS IS IRREVERSIBLE.",
+                    volume_list.join(", ")
+                ))
+                .default(false)
+                .interact()?
+        } else {
+            false
+        }
+    };
+
+    // ---- Run docker compose down ----
+    let mut cmd = std::process::Command::new("docker");
+    cmd.args(["compose", "-f", &compose_file.to_string_lossy(), "down"]);
+    if should_purge {
+        cmd.arg("-v");
+    }
+
+    println!(
+        "  {}",
+        format!(
+            "Running: docker compose -f {} down{}",
+            compose_file.display(),
+            if should_purge { " -v" } else { "" }
+        )
+        .dimmed()
+    );
+
+    match cmd.status() {
+        Ok(s) if s.success() => {
+            println!("  {} Self-hosted stack stopped.", "✓".green());
+            if should_purge {
+                println!("  {} Data volumes deleted.", "✓".green());
+            } else {
+                println!(
+                    "  {}",
+                    "Data volumes kept. Run 'docker volume rm <name>' to delete manually.".dimmed()
+                );
+            }
+            m.selfhost_dir = None;
+        }
+        Ok(s) => {
+            println!(
+                "  {} docker compose down exited with code {}",
+                "!".yellow(),
+                s.code().unwrap_or(-1)
+            );
+            println!(
+                "    {}",
+                format!(
+                    "→ run manually: docker compose -f {} down{}",
+                    compose_file.display(),
+                    if should_purge { " -v" } else { "" }
+                )
+                .cyan()
+            );
+        }
+        Err(e) => {
+            println!("  {} Failed to run docker: {e:#}", "!".yellow());
+            println!(
+                "    {}",
+                format!(
+                    "→ run manually: docker compose -f {} down{}",
+                    compose_file.display(),
+                    if should_purge { " -v" } else { "" }
+                )
+                .cyan()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: uninstall (replaces old implementation)
+// ---------------------------------------------------------------------------
+
+fn uninstall(auto: bool, purge_data: bool, tool_id: Option<&str>) -> Result<()> {
+    banner::print_banner();
+
+    // Confirm unless -y.
+    if !auto {
+        let proceed = Confirm::new()
+            .with_prompt(
+                "This will remove Engrammic from ALL configured editors and delete all skills. Continue?",
+            )
+            .default(false)
+            .interact()?;
+        if !proceed {
+            println!("{}", "Nothing was changed.".dimmed());
+            return Ok(());
+        }
+    }
+
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
+
+    // ---- Determine harnesses to remove ----
+    let recorded: Vec<manifest::HarnessEntry> = if let Some(id) = tool_id {
+        // --tool flag: single harness (legacy compat with old uninstall interface).
+        m.harnesses
+            .iter()
+            .filter(|e| e.tool_id == id)
+            .cloned()
+            .collect()
+    } else {
+        m.harnesses.clone()
+    };
+
+    // Supplement with legacy scan for harnesses not in manifest.
+    let recorded_ids: std::collections::HashSet<_> =
+        recorded.iter().map(|e| e.tool_id.as_str()).collect();
+    let legacy_extra: Vec<manifest::HarnessEntry> = if tool_id.is_none() {
+        legacy_scan()
+            .into_iter()
+            .filter(|t| {
+                !recorded_ids.contains(t.id) && matches!(t.method, InstallMethod::FileEdit(_))
+            })
+            .map(|t| {
+                let ep = detect_installed_endpoint(&t).unwrap_or_default();
+                manifest::HarnessEntry {
+                    tool_id: t.id.to_string(),
+                    config_path: t.config_path.clone(),
+                    backup_path: None,
+                    endpoint: ep,
+                }
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let all_targets: Vec<manifest::HarnessEntry> =
+        recorded.into_iter().chain(legacy_extra).collect();
+
+    // ---- Remove harness entries ----
+    let mut results: Vec<flow::StepResult> = Vec::new();
+    for entry in &all_targets {
+        let outcome = remove_one_harness(entry);
+        if matches!(outcome, flow::Outcome::Done) {
+            m.forget_harness(&entry.tool_id);
+        }
+        results.push(flow::StepResult {
+            label: entry.tool_id.clone(),
+            outcome,
+        });
+    }
+
+    // ---- Remove all skills (format-aware) ----
+    // Use manifest records when available; fall back to SkillDest::all() scan.
+    let skill_paths: Vec<(std::path::PathBuf, String)> = if m.skills.is_empty() {
+        // No manifest records: scan all known skill destinations.
+        tools::SkillDest::all()
+            .into_iter()
+            .map(|d| {
+                (
+                    d.path.clone(),
+                    manifest::skill_format_str(d.format).to_string(),
+                )
+            })
+            .collect()
+    } else {
+        m.skills
+            .iter()
+            .map(|s| (s.path.clone(), s.format.clone()))
+            .collect()
+    };
+
+    for (path, format_str) in &skill_paths {
+        let format = match format_str.as_str() {
+            "directory" => tools::SkillFormat::Directory,
+            "cursor-mdc" => tools::SkillFormat::CursorMdc,
+            "gemini-md" => tools::SkillFormat::GeminiMd,
+            "agents-md" => tools::SkillFormat::AgentsMd,
+            other => {
+                eprintln!(
+                    "  {} unknown skill format '{}' — skipped",
+                    "!".yellow(),
+                    other
+                );
+                continue;
+            }
+        };
+        let removed = match format {
+            tools::SkillFormat::Directory => skills::remove_skills(path)?,
+            tools::SkillFormat::CursorMdc => skills::remove_mdc_skills(path)?,
+            tools::SkillFormat::GeminiMd | tools::SkillFormat::AgentsMd => {
+                skills::remove_gemini_skills(path)?
+            }
+        };
+        if removed > 0 {
+            println!(
+                "  {} Removed {} skill(s) from {}",
+                "✓".green(),
+                removed,
+                path.display()
+            );
+            m.forget_skill(path);
+        }
+    }
+
+    // ---- Self-hosted teardown ----
+    if m.selfhost_dir.is_some() {
+        selfhost_teardown(&mut m, auto, purge_data)?;
+    }
+
+    // ---- Manifest deletion ----
+    let (done, failed, manual) = flow::summarize_results(&results);
+    if failed == 0 {
+        // Delete the manifest file last — it is the source of truth.
+        let manifest_path = manifest::Manifest::path_in(&manifest::Manifest::dir());
+        if manifest_path.exists() {
+            let _ = std::fs::remove_file(&manifest_path);
+            println!(
+                "  {} Manifest deleted: {}",
+                "✓".green(),
+                manifest_path.display()
+            );
+        }
+    } else {
+        // Partial failure: keep manifest so the user can retry.
+        m.save()?;
+        println!(
+            "  {} Manifest kept (some removals failed) at {}",
+            "!".yellow(),
+            manifest::Manifest::path_in(&manifest::Manifest::dir()).display()
+        );
+    }
+
+    // ---- CLI binary self-removal note ----
+    if let Some(ref bin) = m.binary_path {
+        if cfg!(windows) {
+            println!();
+            println!(
+                "  {} {}",
+                "!".yellow(),
+                "Windows: delete the binary manually (cannot unlink while running):"
+            );
+            println!("      del \"{}\"", bin.display());
+        } else {
+            // Unix: safe to unlink self (inode stays valid until the process exits).
+            if bin.exists() {
+                if let Err(e) = std::fs::remove_file(bin) {
+                    println!(
+                        "  {} Could not delete binary at {}: {e:#}",
+                        "!".yellow(),
+                        bin.display()
+                    );
+                    println!(
+                        "    {} {}",
+                        "→".dimmed(),
+                        format!("rm \"{}\"", bin.display()).cyan()
+                    );
+                } else {
+                    println!("  {} Binary removed: {}", "✓".green(), bin.display());
+                }
+            }
+        }
+    } else {
+        println!(
+            "  {}",
+            "(binary path not recorded — delete ~/.local/bin/engrammic manually if needed)"
+                .dimmed()
+        );
+    }
+
+    // ---- Final summary ----
+    print_manual_removal_hints();
+
+    println!();
+    println!(
+        "{} {} removed, {} need a manual step, {} failed.",
+        if failed == 0 {
+            "✓".green()
+        } else {
+            "!".yellow()
+        },
+        done,
+        manual,
+        failed
+    );
+    if failed == 0 {
+        println!("{}", "Engrammic has been fully uninstalled.".green());
+    } else {
+        println!(
+            "  {}",
+            "Some steps failed. Re-run 'engrammic uninstall' to retry.".yellow()
+        );
+    }
 
     Ok(())
 }

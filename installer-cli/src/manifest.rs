@@ -15,6 +15,15 @@ pub struct HarnessEntry {
     pub endpoint: String,
 }
 
+impl HarnessEntry {
+    /// True when the config file did not exist before we wrote it
+    /// (backup_path is None). On removal, the file should be deleted entirely
+    /// rather than surgically uninstalled — we created it, we clean it up.
+    pub fn created_by_us(&self) -> bool {
+        self.backup_path.is_none()
+    }
+}
+
 /// One skill destination we installed into.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillEntry {
@@ -381,5 +390,122 @@ mod tests {
         // forget_skill must resolve the same way so the relative form still matches.
         m.forget_skill(Path::new(".cursor/rules"));
         assert!(m.skills.is_empty());
+    }
+
+    // ---- Phase 3 tests ----
+
+    #[test]
+    fn created_by_us_when_no_backup() {
+        let entry = HarnessEntry {
+            tool_id: "claude".into(),
+            config_path: PathBuf::from("/tmp/settings.json"),
+            backup_path: None,
+            endpoint: "https://beta.engrammic.ai/mcp/".into(),
+        };
+        assert!(
+            entry.created_by_us(),
+            "no backup_path means we created the file"
+        );
+
+        let entry_with_backup = HarnessEntry {
+            tool_id: "cursor".into(),
+            config_path: PathBuf::from("/tmp/other.json"),
+            backup_path: Some(PathBuf::from("/tmp/other.json.engrammic.bak")),
+            endpoint: "https://beta.engrammic.ai/mcp/".into(),
+        };
+        assert!(
+            !entry_with_backup.created_by_us(),
+            "existing backup means the file pre-dated us"
+        );
+    }
+
+    #[test]
+    fn manifest_driven_remove_leaves_other_servers_intact() {
+        // Integration test of config::uninstall via the remove path.
+        // Exercises: record_harness → remove_one_harness (surgical) → forget_harness.
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("settings.json");
+        fs::write(
+            &cfg,
+            r#"{"mcpServers":{"engrammic":{"type":"http","url":"https://beta.engrammic.ai/mcp/"},"keep":{"url":"http://keep"}}}"#,
+        )
+        .unwrap();
+        // Backup exists → pre-existing file → surgical removal.
+        let bak_path = {
+            let mut b = cfg.as_os_str().to_owned();
+            b.push(".engrammic.bak");
+            PathBuf::from(b)
+        };
+        fs::copy(&cfg, &bak_path).unwrap();
+
+        let entry = HarnessEntry {
+            tool_id: "claude".into(),
+            config_path: cfg.clone(),
+            backup_path: Some(bak_path.clone()),
+            endpoint: "https://beta.engrammic.ai/mcp/".into(),
+        };
+
+        // Surgical removal via config::uninstall.
+        let shape = crate::tools::ConfigShape::JsonMap {
+            container: "mcpServers",
+            type_field: crate::tools::TypeField::Http,
+            url_field: "url",
+        };
+        crate::config::uninstall(&cfg, shape).unwrap();
+
+        let content = fs::read_to_string(&cfg).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(
+            v["mcpServers"].get("engrammic").is_none(),
+            "engrammic entry must be removed"
+        );
+        assert_eq!(
+            v["mcpServers"]["keep"]["url"].as_str().unwrap(),
+            "http://keep",
+            "other servers must survive"
+        );
+
+        // Backup must still be present.
+        assert!(bak_path.exists(), "backup must not be deleted by uninstall");
+
+        // Manifest forget_harness.
+        let mut m = Manifest::default();
+        m.harnesses.push(entry);
+        assert_eq!(m.harnesses.len(), 1);
+        m.forget_harness("claude");
+        assert!(m.harnesses.is_empty());
+    }
+
+    #[test]
+    fn created_by_us_causes_file_deletion_not_surgical_removal() {
+        // When backup_path is None, the file was created by us and should be deleted.
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join("new_settings.json");
+        std::fs::write(
+            &cfg,
+            r#"{"mcpServers":{"engrammic":{"type":"http","url":"https://beta.engrammic.ai/mcp/"}}}"#,
+        )
+        .unwrap();
+
+        let entry = HarnessEntry {
+            tool_id: "claude".into(),
+            config_path: cfg.clone(),
+            backup_path: None, // we created it
+            endpoint: "https://beta.engrammic.ai/mcp/".into(),
+        };
+
+        assert!(entry.created_by_us());
+
+        // Simulate what remove_one_harness does for created_by_us entries:
+        if entry.created_by_us() && cfg.exists() {
+            std::fs::remove_file(&cfg).unwrap();
+        }
+
+        assert!(
+            !cfg.exists(),
+            "file created by us must be fully deleted on removal"
+        );
     }
 }

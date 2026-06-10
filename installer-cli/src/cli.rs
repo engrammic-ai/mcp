@@ -28,8 +28,19 @@ pub enum Commands {
     Install,
     /// Update to latest endpoint
     Update,
-    /// Remove Engrammic from config
-    Uninstall,
+    /// Remove Engrammic from one or more editors (keeps other editors intact)
+    Remove {
+        /// Harness IDs to remove from (e.g. --harness claude --harness cursor).
+        /// When omitted, shows an interactive multi-select over all known harnesses.
+        #[arg(long = "harness", value_name = "ID")]
+        harness: Vec<String>,
+    },
+    /// Remove Engrammic from ALL editors, skills, config, and optionally the binary
+    Uninstall {
+        /// Also tear down the self-hosted Docker stack and delete data volumes
+        #[arg(long)]
+        purge_data: bool,
+    },
     /// Show installation status
     Status,
     /// Install skills only (no MCP config changes)
