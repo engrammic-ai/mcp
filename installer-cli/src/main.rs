@@ -446,11 +446,10 @@ fn run_full_install(
     );
     print_restart_reminder();
     println!();
-    // The install.sh script installed this binary to ~/.local/bin/engrammic.
-    // No self-copy needed; print the path for reference.
+    // The install script owns persistence (~/.local/bin); no self-copy here.
     if let Ok(exe) = std::env::current_exe() {
         println!(
-            "  {} CLI installed at {}",
+            "  {} CLI available at {}",
             "✓".green(),
             exe.display().to_string().cyan()
         );

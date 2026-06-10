@@ -7,7 +7,7 @@ set -eu
 
 REPO="engrammic-ai/mcp"
 BINARY="engrammic"
-INSTALL_DIR="${HOME}/.local/bin"
+INSTALL_DIR="${HOME:?HOME is not set — cannot determine install directory}/.local/bin"
 RELEASE_BASE="https://github.com/${REPO}/releases/latest/download"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -17,16 +17,22 @@ warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 err()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ── argument parsing ──────────────────────────────────────────────────────────
-# Collect flags we handle here; everything else is forwarded to the binary.
+# Consume flags we handle here; everything else is forwarded to the binary.
+# Rebuild "$@" in place (rotate-and-filter) so forwarded args keep their exact
+# quoting — POSIX sh has no arrays, but the positional parameters are one.
 
 NO_MODIFY_PATH="${ENGRAMMIC_NO_MODIFY_PATH:-0}"
-FORWARD_ARGS=""
 
-for arg in "$@"; do
+_argc=$#
+_i=0
+while [ "$_i" -lt "$_argc" ]; do
+    arg="$1"
+    shift
     case "$arg" in
         --no-modify-path) NO_MODIFY_PATH=1 ;;
-        *)                FORWARD_ARGS="${FORWARD_ARGS} ${arg}" ;;
+        *)                set -- "$@" "$arg" ;;
     esac
+    _i=$((_i + 1))
 done
 
 # ── MSYS / Git-Bash guard ─────────────────────────────────────────────────────
@@ -101,13 +107,17 @@ fi
 rm -f "$_test_exec_file" 2>/dev/null || true
 
 if [ "$_exec_ok" -ne 0 ]; then
-    warn "\$TMPDIR (${TMPDIR}) is mounted noexec. Falling back to ~/.cache/engrammic/tmp"
+    warn "\$TMPDIR (${TMPDIR}) is not writable or is mounted noexec. Falling back to ~/.cache/engrammic/tmp"
     TMPDIR="${HOME}/.cache/engrammic/tmp"
     mkdir -p "$TMPDIR"
 fi
 
 TMP_BIN="${TMPDIR}/${BINARY}-${TARGET}-$$"
 TMP_SUM="${TMPDIR}/${BINARY}-${TARGET}-$$.sha256"
+
+# Clean up temp files on any exit path (a successful exec never returns here,
+# and the binary has been mv'd away by then, so rm -f finds nothing — fine).
+trap 'rm -f "$TMP_BIN" "$TMP_SUM"' EXIT INT TERM
 
 # ── download binary + checksum ────────────────────────────────────────────────
 
@@ -126,20 +136,21 @@ download "$SUM_URL" "$TMP_SUM"
 
 say "Verifying checksum..."
 _expected_hash=$(awk '{print $1}' "$TMP_SUM")
+[ -n "$_expected_hash" ] || err "Could not read a checksum from ${SUM_URL}.
+  → The checksum file may be missing or malformed.
+  → Retry in a minute; if it persists, open an issue: https://github.com/${REPO}/issues"
 
 if command -v sha256sum >/dev/null 2>&1; then
     # GNU coreutils (Linux + many macOS via brew)
     printf '%s  %s\n' "$_expected_hash" "$TMP_BIN" | sha256sum --check --status \
         || err "Checksum mismatch for ${BINARY}-${TARGET}.
-  → The download may be corrupt or tampered with.
-  → Delete ${TMP_BIN} and retry."
+  → The download may be corrupt or tampered with. Please retry."
     say "Checksum verified."
 elif command -v shasum >/dev/null 2>&1; then
     # macOS built-in
     printf '%s  %s\n' "$_expected_hash" "$TMP_BIN" | shasum -a 256 --check --status \
         || err "Checksum mismatch for ${BINARY}-${TARGET}.
-  → The download may be corrupt or tampered with.
-  → Delete ${TMP_BIN} and retry."
+  → The download may be corrupt or tampered with. Please retry."
     say "Checksum verified."
 else
     warn "No sha256sum or shasum found — skipping checksum verification.
@@ -171,6 +182,12 @@ detect_rc() {
 
 RC_FILE=$(detect_rc)
 
+# Fish uses its own syntax for both the rc file and the interactive hint.
+case "${SHELL:-}" in
+    */fish) RC_LINE="fish_add_path \$HOME/.local/bin" ;;
+    *)      RC_LINE="$EXPORT_LINE" ;;
+esac
+
 # Check whether PATH already contains the dir (skip mutation if so)
 _path_has_local_bin=0
 case ":${PATH}:" in
@@ -179,17 +196,21 @@ esac
 
 if [ "$_path_has_local_bin" -eq 0 ]; then
     if [ "$NO_MODIFY_PATH" -eq 0 ]; then
-        # For fish, ensure the config directory exists before appending
         case "${SHELL:-}" in
             */fish) mkdir -p "${HOME}/.config/fish" ;;
         esac
-        printf '\n# Added by Engrammic installer\n%s\n' "$EXPORT_LINE" >> "$RC_FILE"
-        say "Added PATH entry to ${RC_FILE}"
+        # Append once: re-running the installer must not stack entries.
+        if grep -qF "# Added by Engrammic installer" "$RC_FILE" 2>/dev/null; then
+            say "PATH entry already present in ${RC_FILE}"
+        else
+            printf '\n# Added by Engrammic installer\n%s\n' "$RC_LINE" >> "$RC_FILE"
+            say "Added PATH entry to ${RC_FILE}"
+        fi
     fi
 
     printf '\n'
     printf '\033[33m=>\033[0m To use engrammic in this shell session, run:\n'
-    printf '     %s\n' "$EXPORT_LINE"
+    printf '     %s\n' "$RC_LINE"
     if [ "$NO_MODIFY_PATH" -eq 0 ]; then
         printf '   (Already written to %s for future sessions)\n' "$RC_FILE"
     else
@@ -201,14 +222,17 @@ else
 fi
 
 # ── exec the installed binary ─────────────────────────────────────────────────
-# Always exec from the installed location (not the tmp copy).
-# Default subcommand when called with no args: install.
+# Always exec from the installed location (not the tmp copy). The binary needs
+# a subcommand first: bare flags like `sh -s -- -y` mean `install -y`, while a
+# leading word like `sh -s -- selfhost` is taken as the subcommand itself.
 
 INSTALLED_BIN="${INSTALL_DIR}/${BINARY}"
 
-if [ -z "${FORWARD_ARGS}" ]; then
+if [ $# -eq 0 ]; then
     exec "$INSTALLED_BIN" install
-else
-    # shellcheck disable=SC2086
-    exec "$INSTALLED_BIN" $FORWARD_ARGS
 fi
+
+case "$1" in
+    -*) exec "$INSTALLED_BIN" install "$@" ;;
+    *)  exec "$INSTALLED_BIN" "$@" ;;
+esac

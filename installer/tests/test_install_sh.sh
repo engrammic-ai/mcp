@@ -146,16 +146,32 @@ rm -rf "$_tmp"
 
 printf '\n--- arg passthrough ---\n'
 
-# Simulate the script's argument parsing loop
+# Simulate the script's rotate-and-filter rebuild of "$@" plus the exec
+# decision (no args -> install; leading flag -> install + args; leading word
+# -> args verbatim). Mirrors install.sh; FORWARD_* capture what would be run.
 parse_args() {
     NO_MODIFY_PATH=0
-    FORWARD_ARGS=""
-    for arg in "$@"; do
+    _argc=$#
+    _i=0
+    while [ "$_i" -lt "$_argc" ]; do
+        arg="$1"
+        shift
         case "$arg" in
             --no-modify-path) NO_MODIFY_PATH=1 ;;
-            *)                FORWARD_ARGS="${FORWARD_ARGS} ${arg}" ;;
+            *)                set -- "$@" "$arg" ;;
         esac
+        _i=$((_i + 1))
     done
+    FORWARD_COUNT=$#
+    FORWARD_ARGS="$*"
+    if [ $# -eq 0 ]; then
+        EXEC_LINE="install"
+    else
+        case "$1" in
+            -*) EXEC_LINE="install $*" ;;
+            *)  EXEC_LINE="$*" ;;
+        esac
+    fi
 }
 
 parse_args -y --tool cursor
@@ -163,14 +179,23 @@ assert_eq "$NO_MODIFY_PATH" "0" "no-modify-path stays 0 when not passed"
 assert_contains "$FORWARD_ARGS" "-y" "arg passthrough includes -y"
 assert_contains "$FORWARD_ARGS" "--tool" "arg passthrough includes --tool"
 assert_contains "$FORWARD_ARGS" "cursor" "arg passthrough includes cursor"
+assert_eq "$EXEC_LINE" "install -y --tool cursor" "leading flag gets the install subcommand prepended"
 
 parse_args --no-modify-path -y
 assert_eq "$NO_MODIFY_PATH" "1" "--no-modify-path is consumed and sets flag"
 assert_not_contains "$FORWARD_ARGS" "--no-modify-path" "--no-modify-path not forwarded to binary"
 assert_contains "$FORWARD_ARGS" "-y" "-y is forwarded even alongside --no-modify-path"
+assert_eq "$EXEC_LINE" "install -y" "sh -s -- -y reaches the binary as 'install -y'"
+
+parse_args selfhost
+assert_eq "$EXEC_LINE" "selfhost" "explicit subcommand is forwarded verbatim, not prefixed"
+
+parse_args "tool name with spaces"
+assert_eq "$FORWARD_COUNT" "1" "a quoted arg with spaces stays one argument"
 
 parse_args
-assert_eq "$FORWARD_ARGS" "" "empty args means empty FORWARD_ARGS (will default to install)"
+assert_eq "$FORWARD_ARGS" "" "empty args means empty forward list"
+assert_eq "$EXEC_LINE" "install" "no args defaults to the install subcommand"
 
 # ── Test: no-downloader detection ─────────────────────────────────────────────
 

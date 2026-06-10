@@ -64,7 +64,8 @@ Write-Host "=> Installed to $InstalledBin" -ForegroundColor Green
 # ── PATH registration via user environment (registry) ────────────────────────
 $UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
 
-if ($UserPath -notlike "*$InstallDir*") {
+# Exact-entry comparison: a substring match would be fooled by e.g. ...\bin-old
+if (($UserPath -split ';') -notcontains $InstallDir) {
     $NewPath = if ($UserPath) { "$InstallDir;$UserPath" } else { $InstallDir }
     [System.Environment]::SetEnvironmentVariable("PATH", $NewPath, "User")
     Write-Host ""
@@ -76,9 +77,12 @@ if ($UserPath -notlike "*$InstallDir*") {
 }
 
 # ── Exec the installed binary with passthrough args ───────────────────────────
-# Default subcommand when called with no args: install
+# The binary needs a subcommand first: bare flags like `-y` mean `install -y`,
+# while a leading word like `selfhost` is taken as the subcommand itself.
 if ($args.Count -eq 0) {
     & $InstalledBin install
+} elseif ($args[0] -like '-*') {
+    & $InstalledBin install @args
 } else {
     & $InstalledBin @args
 }

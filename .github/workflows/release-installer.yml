@@ -82,8 +82,11 @@ jobs:
       - name: Generate SHA256 checksums
         run: |
           cd artifacts
+          # Drop stale checksums first so a job re-run never hashes them.
+          rm -f -- *.sha256
           for f in *; do
             [ -f "$f" ] || continue
+            case "$f" in *.sha256) continue ;; esac
             sha256sum "$f" > "${f}.sha256"
           done
           ls -la *.sha256

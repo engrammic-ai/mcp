@@ -51,11 +51,12 @@ pub fn run_diagnostics() -> Result<()> {
             println!("{}", "None in last hour".green());
         }
         Ok(events) => {
+            // Advisory only: a past OOM kill doesn't mean the stack is broken
+            // now, so it must not flip the exit code to 1.
             println!("{}", format!("{} OOM events", events.len()).yellow());
             for event in events {
-                println!("  {} was OOM-killed", event.red());
+                println!("  {} was OOM-killed", event.yellow());
             }
-            all_passed = false;
         }
         Err(_) => {
             println!("{}", "Could not check".dimmed());

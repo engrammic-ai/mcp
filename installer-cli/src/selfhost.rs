@@ -175,20 +175,24 @@ pub fn run_wizard() -> Result<()> {
         print_manual_start_instructions(&config);
     }
 
-    // Save user config
+    // Save user config. A skipped license stays None — Some("") would make
+    // doctor and the returning-user menu report an invalid license forever.
     let user_config = UserConfig {
         endpoint: Some(format!("http://localhost:{}/mcp", config.port)),
-        license_key: Some(config.license_key.clone()),
+        license_key: if config.license_key.is_empty() {
+            None
+        } else {
+            Some(config.license_key.clone())
+        },
         selfhost_dir: Some(config.install_dir.clone()),
     };
     user_config.save()?;
 
     print_quick_reference(&config);
 
-    // The install.sh script installed this binary to ~/.local/bin/engrammic.
     if let Ok(exe) = std::env::current_exe() {
         println!(
-            "  {} CLI installed at {}",
+            "  {} CLI available at {}",
             "✓".green(),
             exe.display().to_string().cyan()
         );
@@ -481,15 +485,16 @@ fn prompt_license() -> Result<Option<String>> {
         }
     }
 
-    println!(
-        "  {}",
-        "(Press Enter with a blank input to skip — finish later with `engrammic license`)".dimmed()
-    );
-
     loop {
+        // Repeated every attempt so a user stuck after a bad key always sees
+        // both the format hint and the way out.
         println!(
             "  {}",
             "(Starts with ENGR_ - request at founders@engrammic.ai)".dimmed()
+        );
+        println!(
+            "  {}",
+            "(Leave blank to skip — finish later with `engrammic license`)".dimmed()
         );
 
         // dialoguer Input does not surface Esc directly; we use an empty string
