@@ -32,6 +32,24 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let auto = cli.yes;
 
+    // Interactive commands need a terminal for prompts (dialoguer reads /dev/tty).
+    // Detect up front so users get one clear message instead of a prompt crash.
+    let interactive_command = matches!(
+        cli.command,
+        Commands::Install | Commands::Update | Commands::Uninstall | Commands::Skills
+            | Commands::Selfhost | Commands::Docker | Commands::License
+    );
+    if interactive_command && !auto && !console::user_attended_stderr() {
+        eprintln!("{} No interactive terminal detected.", "error:".red().bold());
+        eprintln!(
+            "  Re-run with {} to auto-configure detected editors:",
+            "-y".cyan()
+        );
+        eprintln!("    {}", "curl -fsSL https://get.engrammic.ai/install.sh | sh -s -- -y".cyan());
+        eprintln!("  Or run {} from an interactive terminal.", "engrammic install".cyan());
+        std::process::exit(1);
+    }
+
     let result = match cli.command {
         Commands::Install => install(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
         Commands::Update => update(auto, cli.tool.as_deref(), cli.skill_path.as_deref()),
@@ -166,27 +184,40 @@ fn handle_returning_user(
         "Add or update harnesses" => {
             let selection = select_tools(false, tool_id)?;
 
-            // Handle removals first
-            if !selection.to_remove.is_empty() {
-                println!("{}", "Removing from deselected harnesses".bold());
-                for tool in &selection.to_remove {
-                    remove_tool(tool)?;
-                }
-                println!();
-            }
-
             if selection.to_install.is_empty() && selection.to_remove.is_empty() {
                 println!("{} No changes made.", "!".yellow());
                 return Ok(());
             }
 
-            if !selection.to_install.is_empty() {
-                println!("{}", "Configuring harnesses".bold());
-                for tool in &selection.to_install {
-                    install_tool(tool, endpoint)?;
+            // One manifest load for all mutations in this flow.
+            let mut m = manifest::Manifest::load_or_migrate(None)?;
+
+            // Handle removals first
+            if !selection.to_remove.is_empty() {
+                println!("{}", "Removing from deselected harnesses".bold());
+                for tool in &selection.to_remove {
+                    match remove_tool_outcome(tool, &mut m) {
+                        Ok(flow::Outcome::Done) => {
+                            println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
+                        }
+                        Ok(_) => {} // Manual outcomes already printed inside remove_tool_outcome
+                        Err(e) => {
+                            println!("  {} {} — {}", "✗".red(), tool.name, e);
+                        }
+                    }
                 }
                 println!();
             }
+
+            if !selection.to_install.is_empty() {
+                println!("{}", "Configuring harnesses".bold());
+                for tool in &selection.to_install {
+                    install_tool(tool, endpoint, &mut m);
+                }
+                println!();
+            }
+
+            m.save()?;
             println!("{} Done.", "✓".green());
         }
 
@@ -250,6 +281,7 @@ fn run_full_install(
     tool_id: Option<&str>,
     skill_path: Option<&str>,
 ) -> Result<()> {
+    // ---- Interview: every question, zero side effects ----
     let selection = select_tools(auto, tool_id)?;
 
     if selection.to_install.is_empty() && selection.to_remove.is_empty() {
@@ -269,33 +301,79 @@ fn run_full_install(
         return Ok(());
     }
 
-    // Handle removals first
-    if !selection.to_remove.is_empty() {
-        println!("{}", "Removing from deselected harnesses".bold());
-        for tool in &selection.to_remove {
-            remove_tool(tool)?;
+    let skill_dests = ask_skill_dests(auto, skill_path)?;
+
+    let answers = flow::Answers {
+        endpoint: endpoint.clone(),
+        to_install: selection.to_install,
+        to_remove: selection.to_remove,
+        skill_dests,
+    };
+
+    // ---- Plan summary ----
+    println!();
+    print!("{}", flow::render_plan(&answers));
+    println!();
+    if !auto {
+        let proceed = Confirm::new()
+            .with_prompt("Proceed?")
+            .default(true)
+            .interact()?;
+        if !proceed {
+            println!("{}", "Nothing was changed.".dimmed());
+            return Ok(());
         }
         println!();
     }
 
-    // Handle installations
-    if !selection.to_install.is_empty() {
-        println!("{}", "Configuring harnesses".bold());
-        println!(
-            "  {}",
-            "Only the 'engrammic' MCP server entry is modified; other servers are preserved."
-                .dimmed()
-        );
-        println!();
-        for tool in &selection.to_install {
-            install_tool(tool, &endpoint)?;
-        }
-        println!();
+    // ---- Execute: skip-and-continue, one manifest load/save ----
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
+    let mut results: Vec<flow::StepResult> = Vec::new();
+
+    for tool in &answers.to_remove {
+        let outcome = match remove_tool_outcome(tool, &mut m) {
+            Ok(o) => o,
+            Err(e) => flow::Outcome::Failed(format!("{e:#}")),
+        };
+        results.push(flow::StepResult {
+            label: format!("remove {}", tool.name),
+            outcome,
+        });
     }
 
-    install_skills_step(auto, skill_path)?;
+    for tool in &answers.to_install {
+        let tool_id_str = tool.id.to_string();
+        let outcome = install_tool(tool, &answers.endpoint, &mut m);
+        // Embed the retry hint into Failed messages so the summary can print it
+        // without needing a separate id field on StepResult.
+        let outcome = match outcome {
+            flow::Outcome::Failed(msg) => flow::Outcome::Failed(format!(
+                "{msg}\n    {} {}",
+                "→ retry:".dimmed(),
+                format!("engrammic install --tool {tool_id_str}").cyan()
+            )),
+            other => other,
+        };
+        results.push(flow::StepResult {
+            label: tool.name.to_string(),
+            outcome,
+        });
+    }
 
-    // Save config so returning users get the menu
+    if !answers.skill_dests.is_empty() || skill_path.is_some() {
+        let outcome = match install_skills_to(&answers.skill_dests, &mut m, skill_path) {
+            Ok(()) => flow::Outcome::Done,
+            Err(e) => flow::Outcome::Failed(format!("{e:#}")),
+        };
+        results.push(flow::StepResult {
+            label: "skills".to_string(),
+            outcome,
+        });
+    }
+
+    m.save()?;
+
+    // Save endpoint so returning users get the menu (merges via manifest).
     let existing = user_config::UserConfig::load().unwrap_or_default();
     let config = user_config::UserConfig {
         endpoint: Some(endpoint),
@@ -304,17 +382,36 @@ fn run_full_install(
     };
     config.save()?;
 
+    // ---- Summary ----
+    println!();
+    let (done, failed, manual) = flow::summarize_results(&results);
+    for r in &results {
+        match &r.outcome {
+            flow::Outcome::Done => {}
+            flow::Outcome::Failed(msg) => {
+                println!("  {} {} — {}", "✗".red(), r.label, msg);
+            }
+            flow::Outcome::Manual(msg) => {
+                println!("  {} {} — {}", "▸".cyan(), r.label, msg);
+            }
+        }
+    }
+    println!(
+        "{} {} configured, {} need a manual step, {} failed.",
+        if failed == 0 { "✓".green() } else { "!".yellow() },
+        done,
+        manual,
+        failed
+    );
+
     println!();
     println!(
         "Done. Tools available: {}",
         "remember, recall, learn, believe, trace, link".dimmed()
     );
-
     print_restart_reminder();
     println!();
-
     cli_install::offer_cli_install(auto)?;
-
     Ok(())
 }
 
@@ -346,11 +443,22 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
 
     let selection = select_tools(auto, tool_id)?;
 
+    // One manifest load for all mutations in this flow.
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
+
     // Remove deselected harnesses
     if !selection.to_remove.is_empty() {
         println!("{}", "Removing from deselected harnesses".bold());
         for tool in &selection.to_remove {
-            remove_tool(tool)?;
+            match remove_tool_outcome(tool, &mut m) {
+                Ok(flow::Outcome::Done) => {
+                    println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
+                }
+                Ok(_) => {} // Manual outcomes already printed inside remove_tool_outcome
+                Err(e) => {
+                    println!("  {} {} — {}", "✗".red(), tool.name, e);
+                }
+            }
         }
         println!();
     }
@@ -362,9 +470,7 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
                     let backup = config::ensure_backup(&tool.config_path)?;
                     let _ = config::install(&tool.config_path, &ep, shape)?;
                     println!("{} Refreshed engrammic in {}", "✓".green(), tool.name);
-                    let mut m = manifest::Manifest::load_or_migrate(None)?;
                     m.record_harness(tool.id, &tool.config_path, backup, &ep);
-                    m.save()?;
                 } else {
                     println!("{} Not installed for {}", "!".yellow(), tool.name);
                 }
@@ -415,7 +521,6 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
                     path.display()
                 );
             }
-            let mut m = manifest::Manifest::load_or_migrate(None)?;
             for dest in &dests_with_skills {
                 m.record_skill(
                     dest.harness,
@@ -424,31 +529,35 @@ fn update(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result
                     manifest::skill_scope_str(dest.scope),
                 );
             }
-            m.save()?;
         }
     }
+
+    m.save()?;
 
     Ok(())
 }
 
-/// Remove engrammic from a single tool's config.
-fn remove_tool(tool: &Tool) -> Result<()> {
+/// Remove engrammic from a single tool's config, using a caller-owned manifest.
+/// Returns Outcome::Done on success, Outcome::Manual for deep-link/print tools,
+/// or Err on unexpected IO failure.
+fn remove_tool_outcome(tool: &Tool, m: &mut manifest::Manifest) -> Result<flow::Outcome> {
     match tool.method {
         InstallMethod::FileEdit(shape) => {
             config::uninstall(&tool.config_path, shape)?;
-            println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
-            let mut m = manifest::Manifest::load_or_migrate(None)?;
             m.forget_harness(tool.id);
-            m.save()?;
+            Ok(flow::Outcome::Done)
         }
         InstallMethod::DeepLink(_) => {
             println!("  {} {} - remove via app settings", "!".yellow(), tool.name);
+            Ok(flow::Outcome::Manual(
+                "remove via app settings".to_string(),
+            ))
         }
         InstallMethod::PrintInstructions(hint) => {
             println!("  {} {} - remove via {}", "!".yellow(), tool.name, hint);
+            Ok(flow::Outcome::Manual(format!("remove via {hint}")))
         }
     }
-    Ok(())
 }
 
 fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
@@ -466,11 +575,20 @@ fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
         selection.to_install
     };
 
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
+
     for tool in &tools_to_remove {
-        remove_tool(tool)?;
+        match remove_tool_outcome(tool, &mut m) {
+            Ok(flow::Outcome::Done) => {
+                println!("  {} {} {}", "✓".green(), tool.name, "(removed)".dimmed());
+            }
+            Ok(_) => {} // Manual outcomes already printed inside remove_tool_outcome
+            Err(e) => {
+                println!("  {} {} — {}", "✗".red(), tool.name, e);
+            }
+        }
     }
 
-    let mut m = manifest::Manifest::load_or_migrate(None)?;
     for dest in SkillDest::all() {
         let removed = skills::remove_skills_formatted(&dest)?;
         if removed > 0 {
@@ -488,13 +606,21 @@ fn uninstall(auto: bool, tool_id: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Register the engrammic MCP server for one tool, branching on its install method,
-/// and print the outcome.
-fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
+/// Register the engrammic MCP server for one tool. Never returns Err for
+/// per-harness problems — those become Outcome::Failed so other steps continue.
+/// Prints the per-step result inline (Created/Updated/Unchanged) for FileEdit;
+/// keeps existing deep-link/print-instructions output unchanged.
+fn install_tool(tool: &Tool, endpoint: &str, m: &mut manifest::Manifest) -> flow::Outcome {
     match tool.method {
         InstallMethod::FileEdit(shape) => {
-            let backup = config::ensure_backup(&tool.config_path)?;
-            let result = config::install(&tool.config_path, endpoint, shape)?;
+            let backup = match config::ensure_backup(&tool.config_path) {
+                Ok(b) => b,
+                Err(e) => return flow::Outcome::Failed(format!("backup failed: {e:#}")),
+            };
+            let result = match config::install(&tool.config_path, endpoint, shape) {
+                Ok(r) => r,
+                Err(e) => return flow::Outcome::Failed(format!("{e:#}")),
+            };
             match result {
                 config::InstallResult::Created => {
                     println!(
@@ -522,9 +648,8 @@ fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
                 }
             }
             println!("    {}", tool.config_path.display().to_string().dimmed());
-            let mut m = manifest::Manifest::load_or_migrate(None)?;
             m.record_harness(tool.id, &tool.config_path, backup, endpoint);
-            m.save()?;
+            flow::Outcome::Done
         }
         InstallMethod::DeepLink(DeepLinkKind::VsCode) => {
             let links = deeplink::vscode_links(endpoint);
@@ -544,6 +669,7 @@ fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
                 );
             }
             println!("    {}", links.redirect.cyan());
+            flow::Outcome::Manual("requires an in-app step (shown above)".to_string())
         }
         InstallMethod::DeepLink(DeepLinkKind::Cursor) => {
             let links = deeplink::cursor_links(endpoint);
@@ -563,6 +689,7 @@ fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
                 );
             }
             println!("    {}", links.redirect.cyan());
+            flow::Outcome::Manual("requires an in-app step (shown above)".to_string())
         }
         InstallMethod::PrintInstructions(hint) => {
             let block = serde_json::json!({
@@ -585,9 +712,9 @@ fn install_tool(tool: &Tool, endpoint: &str) -> Result<()> {
                     .unwrap_or_default()
                     .dimmed()
             );
+            flow::Outcome::Manual("requires an in-app step (shown above)".to_string())
         }
     }
-    Ok(())
 }
 
 fn detect_installed_endpoint(tool: &Tool) -> Option<String> {
@@ -770,8 +897,78 @@ fn select_tools(auto: bool, tool_id: Option<&str>) -> Result<ToolSelection> {
     })
 }
 
-fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
-    // If custom skill path provided, use it directly (Directory format assumed)
+/// Prompting half of the skills step: ask the user which destinations to install
+/// skills to. Returns a vec of chosen destinations (may be empty on decline or
+/// zero-selection). In auto mode returns detected (default) dests. When
+/// `skill_path` is Some, the custom-path branch is handled entirely inside
+/// `install_skills_to`, so we skip prompts and return `Ok(vec![])`.
+fn ask_skill_dests(auto: bool, skill_path: Option<&str>) -> Result<Vec<SkillDest>> {
+    // Custom path bypasses the destination prompts entirely.
+    if skill_path.is_some() {
+        return Ok(vec![]);
+    }
+
+    let proceed = if auto {
+        true
+    } else {
+        Confirm::new()
+            .with_prompt("Also install 21 Engrammic skills?")
+            .default(true)
+            .interact()?
+    };
+
+    if !proceed {
+        println!("  {} Skipped skills.", "-".dimmed());
+        return Ok(vec![]);
+    }
+
+    let all_dests = SkillDest::all();
+    if auto {
+        return Ok(all_dests.into_iter().filter(|d| d.default).collect());
+    }
+
+    let options: Vec<String> = all_dests
+        .iter()
+        .map(|d| {
+            let scope = match d.scope {
+                tools::SkillScope::User => "(user)",
+                tools::SkillScope::Project => "(project)",
+            };
+            let detected = if d.default { "  (detected)" } else { "" };
+            format!("{:<25} {}{}", d.name, scope.dimmed(), detected.dimmed())
+        })
+        .collect();
+
+    println!("  {}", "(↑↓ move · space toggle · enter confirm)".dimmed());
+    let options_strs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
+    let picked_indices = MultiSelect::new()
+        .with_prompt("Install skills to")
+        .items(&options_strs)
+        .interact()?;
+
+    let chosen: Vec<SkillDest> = all_dests
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| picked_indices.contains(i))
+        .map(|(_, d)| d)
+        .collect();
+
+    if chosen.is_empty() {
+        println!("  {} No skill destination selected.", "-".dimmed());
+    }
+
+    Ok(chosen)
+}
+
+/// Acting half of the skills step: download/copy skills to the given destinations
+/// and record them in the caller-owned manifest. When `skill_path` is Some the
+/// custom path is used instead of `dests` (and is NOT recorded in the manifest,
+/// matching the existing behavior).
+fn install_skills_to(
+    dests: &[SkillDest],
+    m: &mut manifest::Manifest,
+    skill_path: Option<&str>,
+) -> Result<()> {
     if let Some(custom_path) = skill_path {
         let path = std::path::PathBuf::from(custom_path);
         let results = skills::install_skills_to_paths(&[path])?;
@@ -787,58 +984,11 @@ fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let proceed = if auto {
-        true
-    } else {
-        Confirm::new()
-            .with_prompt("Also install 21 Engrammic skills?")
-            .default(true)
-            .interact()?
-    };
-
-    if !proceed {
-        println!("  {} Skipped skills.", "-".dimmed());
+    if dests.is_empty() {
         return Ok(());
     }
 
-    let all_dests = SkillDest::all();
-    let chosen: Vec<&SkillDest> = if auto {
-        all_dests.iter().filter(|d| d.default).collect()
-    } else {
-        let options: Vec<String> = all_dests
-            .iter()
-            .map(|d| {
-                let scope = match d.scope {
-                    tools::SkillScope::User => "(user)",
-                    tools::SkillScope::Project => "(project)",
-                };
-                let detected = if d.default { "  (detected)" } else { "" };
-                format!("{:<25} {}{}", d.name, scope.dimmed(), detected.dimmed())
-            })
-            .collect();
-
-        println!("  {}", "(↑↓ move · space toggle · enter confirm)".dimmed());
-        let options_strs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
-        let picked_indices = MultiSelect::new()
-            .with_prompt("Install skills to")
-            .items(&options_strs)
-            .interact()?;
-
-        all_dests
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| picked_indices.contains(i))
-            .map(|(_, d)| d)
-            .collect()
-    };
-
-    if chosen.is_empty() {
-        println!("  {} No skill destination selected.", "-".dimmed());
-        return Ok(());
-    }
-
-    let dests_vec: Vec<SkillDest> = chosen.into_iter().cloned().collect();
-    let results = skills::install_skills(&dests_vec)?;
+    let results = skills::install_skills(dests)?;
 
     println!("{}", "Installing skills".bold());
     for (path, count) in results {
@@ -849,8 +999,7 @@ fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
             path.display().to_string().dimmed()
         );
     }
-    let mut m = manifest::Manifest::load_or_migrate(None)?;
-    for dest in &dests_vec {
+    for dest in dests {
         m.record_skill(
             dest.harness,
             &dest.path,
@@ -858,6 +1007,18 @@ fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
             manifest::skill_scope_str(dest.scope),
         );
     }
+    Ok(())
+}
+
+/// Convenience wrapper for call sites that don't participate in the
+/// interview→execute flow (e.g. "Refresh skills" in the returning-user menu).
+fn install_skills_step(auto: bool, skill_path: Option<&str>) -> Result<()> {
+    let dests = ask_skill_dests(auto, skill_path)?;
+    if dests.is_empty() && skill_path.is_none() {
+        return Ok(());
+    }
+    let mut m = manifest::Manifest::load_or_migrate(None)?;
+    install_skills_to(&dests, &mut m, skill_path)?;
     m.save()?;
     Ok(())
 }
@@ -872,56 +1033,9 @@ fn install_skills_only(auto: bool, skill_path: Option<&str>) -> Result<()> {
     );
     println!();
 
-    // If custom skill path provided, use it directly
-    if let Some(custom_path) = skill_path {
-        let path = std::path::PathBuf::from(custom_path);
-        let results = skills::install_skills_to_paths(&[path])?;
-        println!("{}", "Installing skills".bold());
-        for (p, count) in results {
-            println!(
-                "  {} {} skills  {}",
-                "✓".green(),
-                count,
-                p.display().to_string().dimmed()
-            );
-        }
-        print_restart_reminder();
-        return Ok(());
-    }
+    let dests = ask_skill_dests(auto, skill_path)?;
 
-    let all_dests = SkillDest::all();
-    let chosen: Vec<&SkillDest> = if auto {
-        // Auto mode: install to all detected destinations
-        all_dests.iter().filter(|d| d.default).collect()
-    } else {
-        let options: Vec<String> = all_dests
-            .iter()
-            .map(|d| {
-                let scope = match d.scope {
-                    tools::SkillScope::User => "(user)",
-                    tools::SkillScope::Project => "(project)",
-                };
-                let detected = if d.default { "  (detected)" } else { "" };
-                format!("{:<25} {}{}", d.name, scope.dimmed(), detected.dimmed())
-            })
-            .collect();
-
-        println!("  {}", "(↑↓ move · space toggle · enter confirm)".dimmed());
-        let options_strs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
-        let picked_indices = MultiSelect::new()
-            .with_prompt("Install skills to")
-            .items(&options_strs)
-            .interact()?;
-
-        all_dests
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| picked_indices.contains(i))
-            .map(|(_, d)| d)
-            .collect()
-    };
-
-    if chosen.is_empty() {
+    if dests.is_empty() && skill_path.is_none() {
         println!("{} No skill destination selected.", "!".yellow());
         println!(
             "  Run {} anytime to install them.",
@@ -930,28 +1044,8 @@ fn install_skills_only(auto: bool, skill_path: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let dests_vec: Vec<SkillDest> = chosen.into_iter().cloned().collect();
-    let results = skills::install_skills(&dests_vec)?;
-
-    println!("{}", "Installing skills".bold());
-    for (path, count) in results {
-        println!(
-            "  {} {} skills  {}",
-            "✓".green(),
-            count,
-            path.display().to_string().dimmed()
-        );
-    }
-
     let mut m = manifest::Manifest::load_or_migrate(None)?;
-    for dest in &dests_vec {
-        m.record_skill(
-            dest.harness,
-            &dest.path,
-            manifest::skill_format_str(dest.format),
-            manifest::skill_scope_str(dest.scope),
-        );
-    }
+    install_skills_to(&dests, &mut m, skill_path)?;
     m.save()?;
     print_restart_reminder();
     Ok(())
