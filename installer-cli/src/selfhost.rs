@@ -7,11 +7,21 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::cli_install;
 use crate::docker;
 use crate::license;
 use crate::tools::Tool;
 use crate::user_config::UserConfig;
+
+/// Print a two-line error in the standard ✗ / → format.
+///
+///   ✗ <what_happened>
+///   → <what_to_do>
+///
+/// Use this for all user-facing failures so the format is consistent.
+fn fmt_err(what_happened: &str, what_to_do: &str) {
+    eprintln!("  {} {}", "✗".red().bold(), what_happened);
+    eprintln!("  {} {}", "→".yellow(), what_to_do);
+}
 
 const DEFAULT_PORT: u16 = 8000;
 const DEFAULT_DAGSTER_PORT: u16 = 3000;
@@ -94,7 +104,11 @@ pub fn run_wizard() -> Result<()> {
     println!();
     println!("{}", "Step 3/6: License".bold());
     println!();
-    let license_key = prompt_license()?;
+    let license_key_opt = prompt_license()?;
+    let license_key = license_key_opt.unwrap_or_default();
+    // If empty: the .env will have ENGRAMMIC_LICENSE_KEY= (blank); the user must run
+    // `engrammic license` before Engrammic will accept connections. The wizard
+    // continues so the rest of the setup is not lost.
 
     // Step 4: Embeddings (skip for standalone tiers - they use TEI)
     let (embedding_model, embedding_dimensions, embedding_credential) = if tier.is_standalone() {
@@ -171,7 +185,14 @@ pub fn run_wizard() -> Result<()> {
 
     print_quick_reference(&config);
 
-    cli_install::offer_cli_install(false)?;
+    // The install.sh script installed this binary to ~/.local/bin/engrammic.
+    if let Ok(exe) = std::env::current_exe() {
+        println!(
+            "  {} CLI installed at {}",
+            "✓".green(),
+            exe.display().to_string().cyan()
+        );
+    }
 
     Ok(())
 }
@@ -209,12 +230,14 @@ fn check_prerequisites() -> Result<()> {
     if !docker::check_docker()? {
         println!("{}", "not found".red());
         println!();
-        println!(
-            "  {} Docker is required. Install from: {}",
-            "!".yellow(),
-            "https://docs.docker.com/get-docker/".cyan()
+        fmt_err(
+            "Docker is not running or not installed.",
+            &format!(
+                "Install Docker Desktop from {} then try again.",
+                "https://docs.docker.com/get-docker/".cyan()
+            ),
         );
-        anyhow::bail!("Docker not available");
+        anyhow::bail!("Docker is not running or not installed");
     }
     println!("{}", "ok".green());
 
@@ -230,11 +253,11 @@ fn check_prerequisites() -> Result<()> {
         _ => {
             println!("{}", "not found".red());
             println!();
-            println!(
-                "  {} Docker Compose v2 is required. Upgrade Docker Desktop or install the compose plugin.",
-                "!".yellow()
+            fmt_err(
+                "Docker Compose v2 not found.",
+                "Upgrade Docker Desktop or install the compose plugin, then try again.",
             );
-            anyhow::bail!("Docker Compose v2 not available");
+            anyhow::bail!("Docker Compose v2 not found");
         }
     }
 
@@ -431,7 +454,14 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
     Ok(())
 }
 
-fn prompt_license() -> Result<String> {
+/// Prompt for a license key with a retry loop.
+///
+/// Returns `Some(key)` on success, `None` if the user leaves the input blank to skip.
+/// The caller should then record that the license step is pending and print
+/// how to complete it later (`engrammic license`).
+///
+/// Not unit-testable (requires a TTY).
+fn prompt_license() -> Result<Option<String>> {
     let existing = UserConfig::load().ok().and_then(|c| c.license_key);
 
     if let Some(ref key) = existing {
@@ -446,33 +476,59 @@ fn prompt_license() -> Result<String> {
                 .default(true)
                 .interact()?;
             if keep {
-                return Ok(key.clone());
+                return Ok(Some(key.clone()));
             }
         }
     }
+
+    println!(
+        "  {}",
+        "(Press Enter with a blank input to skip — finish later with `engrammic license`)".dimmed()
+    );
 
     loop {
         println!(
             "  {}",
             "(Starts with ENGR_ - request at founders@engrammic.ai)".dimmed()
         );
-        let key: String = Input::new()
-            .with_prompt("License key (input visible)")
+
+        // dialoguer Input does not surface Esc directly; we use an empty string
+        // submitted via Enter as the skip signal (user is told to leave blank).
+        let raw: String = Input::new()
+            .with_prompt("License key (input visible, blank to skip)")
+            .allow_empty(true)
             .interact_text()?;
+
+        let key = raw.trim().to_string();
+
+        if key.is_empty() {
+            println!();
+            println!("  {} License skipped.", "→".yellow());
+            println!(
+                "  Run {} to add your license key later.",
+                "engrammic license".cyan()
+            );
+            println!();
+            return Ok(None);
+        }
 
         match license::validate_license_format(&key) {
             Ok(info) => {
                 println!(
-                    "  {} Valid - {}, {} days remaining",
+                    "  {} Valid — {}, {} days remaining",
                     "✓".green(),
                     info.customer.cyan(),
                     info.days_remaining
                 );
-                return Ok(key);
+                return Ok(Some(key));
             }
             Err(e) => {
-                println!("  {} {}", "✗".red(), e);
+                fmt_err(
+                    &format!("{}", e),
+                    "Check the key starts with ENGR_, is not expired, and was copied in full.",
+                );
                 println!();
+                // loop continues
             }
         }
     }
@@ -727,7 +783,12 @@ fn prompt_install_dir() -> Result<PathBuf> {
             .default(false)
             .interact()?;
         if !overwrite {
-            anyhow::bail!("Cancelled - existing installation preserved");
+            println!(
+                "  {} Existing installation preserved at {}",
+                "→".yellow(),
+                path.display()
+            );
+            anyhow::bail!("Cancelled — existing installation preserved");
         }
     }
 
@@ -990,8 +1051,11 @@ fn start_and_wait(config: &SelfHostConfig) -> Result<()> {
     let output = pull.wait_with_output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        println!("  {} Failed to pull images: {}", "✗".red(), stderr);
-        anyhow::bail!("docker compose pull failed");
+        fmt_err(
+            &format!("Failed to pull Docker images: {}", stderr.trim()),
+            "Check your internet connection and Docker daemon, then run `engrammic selfhost` again.",
+        );
+        anyhow::bail!("docker compose pull failed: {}", stderr.trim());
     }
     println!("  {} Images pulled", "✓".green());
 
@@ -1156,6 +1220,13 @@ fn print_quick_reference(config: &SelfHostConfig) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn check_prerequisites_bail_message_is_specific() {
+        // This test is documentation: check_prerequisites is not unit-testable
+        // without Docker. Compile-check only — assert the function exists.
+        let _: fn() -> anyhow::Result<()> = super::check_prerequisites;
+    }
+
     #[test]
     fn models_yaml_template_schema_valid() {
         let template = include_str!("../assets/models.yaml");

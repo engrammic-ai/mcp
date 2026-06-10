@@ -4,6 +4,11 @@ use anyhow::Result;
 use colored::Colorize;
 use std::process::Command;
 
+/// Run all self-hosted diagnostics.
+///
+/// Exit codes:
+///   0 — all hard checks passed (warnings may still be printed)
+///   1 — one or more hard checks failed; output describes each failure
 pub fn run_diagnostics() -> Result<()> {
     println!();
     println!("{}", "Engrammic Diagnostics".bold());
@@ -98,11 +103,30 @@ pub fn run_diagnostics() -> Result<()> {
     println!();
     if all_passed {
         println!("{}", "All checks passed.".green().bold());
+        Ok(())
     } else {
-        println!("{}", "Some checks need attention. See above.".yellow());
+        // Print the ✗ / → summary line before exiting.
+        eprintln!("  {} One or more checks failed.", "✗".red());
+        eprintln!(
+            "  {} Review the items marked {} above and address them before continuing.",
+            "→".yellow(),
+            "red".red()
+        );
+        // Exit with code 1 so callers (scripts, CI) can detect unhealthy state.
+        // We use process::exit rather than Err(...) to avoid printing a redundant
+        // anyhow error chain — the output above is already the full diagnosis.
+        std::process::exit(1);
     }
+}
 
-    Ok(())
+#[cfg(test)]
+mod tests {
+    /// Document the exit-code contract. Not runnable without Docker;
+    /// presence in the test module ensures the function signature stays stable.
+    #[test]
+    fn run_diagnostics_signature_returns_result() {
+        let _: fn() -> anyhow::Result<()> = super::run_diagnostics;
+    }
 }
 
 fn check_docker_running() -> bool {
