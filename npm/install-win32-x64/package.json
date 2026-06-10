@@ -1,0 +1,10 @@
+{
+  "name": "@engrammic/install-win32-x64",
+  "version": "0.12.0",
+  "description": "Engrammic installer binary — Windows x64",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/engrammic-ai/mcp" },
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "bin": {}
+}

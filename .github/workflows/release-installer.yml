@@ -96,3 +96,97 @@ jobs:
         with:
           files: artifacts/*
           generate_release_notes: true
+
+  publish-npm:
+    name: Publish npm packages
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          # Tag format: installer-v0.12.0 → version 0.12.0
+          echo "version=${GITHUB_REF_NAME#installer-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Populate platform packages and set versions
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Mapping: artifact filename → npm platform package directory
+          declare -A PKG_MAP=(
+            ["engrammic-x86_64-unknown-linux-gnu"]="npm/install-linux-x64"
+            ["engrammic-aarch64-unknown-linux-gnu"]="npm/install-linux-arm64"
+            ["engrammic-x86_64-apple-darwin"]="npm/install-darwin-x64"
+            ["engrammic-aarch64-apple-darwin"]="npm/install-darwin-arm64"
+            ["engrammic-x86_64-pc-windows-msvc.exe"]="npm/install-win32-x64"
+          )
+          for artifact in "${!PKG_MAP[@]}"; do
+            dir="${PKG_MAP[$artifact]}"
+            src="artifacts/${artifact}"
+            if [ ! -f "$src" ]; then
+              echo "WARNING: artifact not found: $src — skipping"
+              continue
+            fi
+            if [[ "$artifact" == *.exe ]]; then
+              cp "$src" "$dir/engrammic.exe"
+            else
+              cp "$src" "$dir/engrammic"
+              chmod +x "$dir/engrammic"
+            fi
+            # Set the version in each platform package.json
+            node -e "
+              const fs = require('fs');
+              const p = '$dir/package.json';
+              const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+              pkg.version = '$VERSION';
+              fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+            "
+          done
+          # Set version in root launcher package
+          node -e "
+            const fs = require('fs');
+            const p = 'npm/install/package.json';
+            const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+            pkg.version = '$VERSION';
+            // Bump all optionalDependencies to the same version
+            for (const k of Object.keys(pkg.optionalDependencies || {})) {
+              pkg.optionalDependencies[k] = '$VERSION';
+            }
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+          "
+          # Ensure launcher is executable in the tarball
+          chmod +x npm/install/index.js
+
+      # PRE-REQUISITE: add NPM_TOKEN to repository secrets.
+      # Create at https://www.npmjs.com/settings/<org>/tokens
+      # Token type: Automation (does not require 2FA on publish).
+      - name: Publish platform packages
+        run: |
+          for dir in npm/install-linux-x64 npm/install-linux-arm64 \
+                     npm/install-darwin-x64 npm/install-darwin-arm64 \
+                     npm/install-win32-x64; do
+            echo "Publishing $dir ..."
+            npm publish "$dir" --access public
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish root launcher package
+        run: npm publish npm/install --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
