@@ -1,6 +1,5 @@
 mod banner;
 mod cli;
-mod cli_install;
 mod config;
 mod deeplink;
 mod docker;
@@ -447,7 +446,15 @@ fn run_full_install(
     );
     print_restart_reminder();
     println!();
-    cli_install::offer_cli_install(auto)?;
+    // The install.sh script installed this binary to ~/.local/bin/engrammic.
+    // No self-copy needed; print the path for reference.
+    if let Ok(exe) = std::env::current_exe() {
+        println!(
+            "  {} CLI installed at {}",
+            "✓".green(),
+            exe.display().to_string().cyan()
+        );
+    }
     Ok(())
 }
 

@@ -79,6 +79,15 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          for f in *; do
+            [ -f "$f" ] || continue
+            sha256sum "$f" > "${f}.sha256"
+          done
+          ls -la *.sha256
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
