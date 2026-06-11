@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "engrammic",
+  "displayName": "Engrammic",
+  "version": "0.6.0",
+  "description": "Persistent, structured memory for AI agents. Organizes memory into cognitive layers: observations become claims, claims become facts, facts become beliefs.",
+  "author": {
+    "name": "Aliasgar Khimani",
+    "email": "aliasgar.khimani@engrammic.ai"
+  },
+  "homepage": "https://engrammic.ai",
+  "repository": "https://github.com/engrammic-ai/mcp-client",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "context", "mcp", "epistemology", "knowledge-management"],
+  "mcpServers": {
+    "engrammic": {
+      "type": "http",
+      "url": "https://beta.engrammic.ai/mcp/"
+    }
+  }
+}
