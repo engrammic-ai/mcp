@@ -8,10 +8,6 @@ from engrammic_mcp.config import Settings
 from engrammic_mcp.tools import (
     believe,
     commit,
-    context_accept_belief,
-    context_admin,
-    context_belief_state,
-    context_reject_belief,
     hypothesize,
     learn,
     link,
@@ -28,10 +24,6 @@ from engrammic_mcp.tools import (
 @pytest.fixture(autouse=True)
 def reset_clients() -> None:
     reset_http_client()
-    context_admin.reset_client()
-    context_belief_state.reset_client()
-    context_accept_belief.reset_client()
-    context_reject_belief.reset_client()
     remember.reset_client()
     learn.reset_client()
     believe.reset_client()
@@ -53,10 +45,6 @@ def settings(temp_credentials_dir, monkeypatch) -> Settings:
         api_key="test_key",
         credentials_path=temp_credentials_dir / "creds.json",
     )
-    monkeypatch.setattr("engrammic_mcp.tools.context_admin.get_settings", lambda: s)
-    monkeypatch.setattr("engrammic_mcp.tools.context_belief_state.get_settings", lambda: s)
-    monkeypatch.setattr("engrammic_mcp.tools.context_accept_belief.get_settings", lambda: s)
-    monkeypatch.setattr("engrammic_mcp.tools.context_reject_belief.get_settings", lambda: s)
     monkeypatch.setattr("engrammic_mcp.tools.remember.get_settings", lambda: s)
     monkeypatch.setattr("engrammic_mcp.tools.learn.get_settings", lambda: s)
     monkeypatch.setattr("engrammic_mcp.tools.believe.get_settings", lambda: s)
@@ -70,48 +58,6 @@ def settings(temp_credentials_dir, monkeypatch) -> Settings:
     monkeypatch.setattr("engrammic_mcp.tools.commit.get_settings", lambda: s)
     monkeypatch.setattr("engrammic_mcp.tools.patterns.get_settings", lambda: s)
     return s
-
-
-class TestContextAdmin:
-    async def test_whoami(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url="https://api.test.com/v1/context/admin",
-            json={"org_id": "org123", "user_id": "user456"},
-        )
-        result = await context_admin.admin(action="whoami")
-        assert result["org_id"] == "org123"
-
-
-class TestContextBeliefState:
-    async def test_query_session(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url="https://api.test.com/v1/context/belief_state",
-            json={"working_hypotheses": [{"belief_id": "h1"}], "potential_contradictions": []},
-        )
-        result = await context_belief_state.belief_state(session_id="session123")
-        assert len(result["working_hypotheses"]) == 1
-
-
-class TestContextAcceptBelief:
-    async def test_accept(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url="https://api.test.com/v1/context/accept_belief",
-            json={"proposed_belief_id": "p1", "status": "accepted", "created_belief_id": "b1"},
-        )
-        result = await context_accept_belief.accept_belief(belief_id="p1")
-        assert result["status"] == "accepted"
-
-
-class TestContextRejectBelief:
-    async def test_reject(self, settings: Settings, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url="https://api.test.com/v1/context/reject_belief",
-            json={"proposed_belief_id": "p1", "status": "rejected"},
-        )
-        result = await context_reject_belief.reject_belief(
-            belief_id="p1", reason="Not enough evidence"
-        )
-        assert result["status"] == "rejected"
 
 
 class TestRemember:
