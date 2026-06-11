@@ -3,6 +3,7 @@
 from typing import Any, Literal
 
 from fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from engrammic_mcp.tools import (
     believe,
@@ -50,7 +51,10 @@ def create_server() -> FastMCP:
 
     # --- Verb-based agent surface tools ---
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Remember",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def remember_tool(
         content: str,
         tags: list[str] | None = None,
@@ -65,7 +69,10 @@ def create_server() -> FastMCP:
             supersedes=supersedes,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Learn",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def learn_tool(
         claim: str,
         evidence: list[str],
@@ -86,7 +93,10 @@ def create_server() -> FastMCP:
             supersedes=supersedes,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Believe",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def believe_tool(
         belief: str,
         about: list[str] | str,
@@ -103,7 +113,10 @@ def create_server() -> FastMCP:
             supersedes=supersedes,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Recall",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def recall_tool(
         query: str | None = None,
         node_ids: list[str] | None = None,
@@ -126,14 +139,20 @@ def create_server() -> FastMCP:
             max_age_seconds=max_age_seconds,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Trace",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def trace_tool(
         node_id: str,
     ) -> dict[str, Any]:
         """Trace provenance of a belief back to sources."""
         return await trace.trace(node_id=node_id)
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Link",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def link_tool(
         source_id: str,
         target_id: str,
@@ -150,7 +169,10 @@ def create_server() -> FastMCP:
             weight=weight,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Reason",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def reason_tool(
         problem: str,
         steps: list[dict[str, Any]],
@@ -163,7 +185,10 @@ def create_server() -> FastMCP:
             tags=tags,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Reflect",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def reflect_tool(
         observation: str,
         about: list[str] | None = None,
@@ -176,7 +201,10 @@ def create_server() -> FastMCP:
             observation_type=observation_type,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Hypothesize",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def hypothesize_tool(
         hypothesis: str,
         about: list[str],
@@ -191,7 +219,10 @@ def create_server() -> FastMCP:
             session_id=session_id,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Revise",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def revise_tool(
         belief_id: str,
         confidence: float,
@@ -206,7 +237,10 @@ def create_server() -> FastMCP:
             content=content,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Commit",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def commit_tool(
         belief_ids: list[str],
         reason: str | None = None,
@@ -217,7 +251,10 @@ def create_server() -> FastMCP:
             reason=reason,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Patterns",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def patterns_tool(
         action: Literal["list", "get", "search"],
         name: str | None = None,
@@ -232,7 +269,10 @@ def create_server() -> FastMCP:
             profile=profile,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Forget",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
+    )
     async def forget_tool(
         node_id: str,
         reason: str | None = None,
@@ -245,7 +285,10 @@ def create_server() -> FastMCP:
             cascade=cascade,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Dismiss",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
+    )
     async def dismiss_tool(
         marker_id: str,
         reason: str,
@@ -258,7 +301,10 @@ def create_server() -> FastMCP:
             silo_id=silo_id,
         )
 
-    @mcp.tool()
+    @mcp.tool(
+        title="Tick",
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
     async def tick_tool(
         about_hint: list[str] | None = None,
         silo_id: str | None = None,
