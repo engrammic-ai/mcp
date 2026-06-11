@@ -181,7 +181,8 @@ jobs:
                      npm/install-darwin-x64 npm/install-darwin-arm64 \
                      npm/install-win32-x64; do
             echo "Publishing $dir ..."
-            if ! out=$(npm publish "$dir" --access public 2>&1); then
+            # ./ prefix: a bare npm/<name> arg is parsed as a GitHub repo spec
+            if ! out=$(npm publish "./$dir" --access public 2>&1); then
               if printf '%s' "$out" | grep -q "previously published\|cannot publish over\|EPUBLISHCONFLICT\|403"; then
                 echo "already published — skipping $dir"
               else
@@ -195,7 +196,7 @@ jobs:
 
       - name: Publish root launcher package
         run: |
-          if ! out=$(npm publish npm/install --access public 2>&1); then
+          if ! out=$(npm publish ./npm/install --access public 2>&1); then
             if printf '%s' "$out" | grep -q "previously published\|cannot publish over\|EPUBLISHCONFLICT\|403"; then
               echo "already published — skipping npm/install"
             else
