@@ -87,6 +87,40 @@ For fully local, offline usage, see [engrammic-engine](https://github.com/engram
 - [EAG Paradigm](https://github.com/engrammic-ai/primitives/blob/main/docs/README.md) - the cognitive architecture
 - [Skills](https://github.com/engrammic-ai/skills) - workflow guidance for Claude Code, Codex, Cursor, Gemini CLI
 
+## Privacy Policy
+
+Engrammic collects and processes the following data:
+
+**Data Collected:**
+- Memory content you explicitly store (observations, claims, beliefs, reasoning)
+- Authentication tokens (stored locally at `~/.engrammic/credentials.json`)
+- Session metadata for engagement tracking
+
+**Data Usage:**
+- Memory content is used to provide persistent context across agent sessions
+- Tokens are used solely for API authentication
+- No data is used for training or shared with third parties
+
+**Data Storage:**
+- **Hosted mode** (default): Data stored on Engrammic servers at `beta.engrammic.ai`
+- **Self-hosted mode**: Data stored on your own infrastructure via [engrammic-engine](https://github.com/engrammic-ai/engine)
+- Local credentials stored with restricted permissions (0600)
+
+**Data Retention:**
+- Memory persists until explicitly deleted via the `forget` tool
+- Session data expires after 24 hours of inactivity
+- Account deletion removes all associated data
+
+**Your Rights:**
+- Export your data via the recall API
+- Delete specific memories via the forget tool
+- Delete all data by contacting support
+
+**Contact:**
+For privacy inquiries: privacy@engrammic.ai
+
+For the complete privacy policy, see: https://engrammic.ai/privacy
+
 ## License
 
 Apache 2.0
