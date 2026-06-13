@@ -17,8 +17,13 @@ $ReleaseUrl = "https://github.com/$Repo/releases/latest/download/$Binary-$Target
 $TempDir = $env:TEMP
 $Installer = Join-Path $TempDir "$Binary.exe"
 
-Write-Host "Downloading..."
+Write-Host "=> Downloading skills installer..."
 Invoke-WebRequest -Uri $ReleaseUrl -OutFile $Installer -UseBasicParsing
+
+Write-Host "=> Installing skills..."
 
 # Run skills-only install with auto-accept
 & $Installer skills -y @args
+
+Write-Host ""
+Write-Host "=> Skills installation complete!" -ForegroundColor Green

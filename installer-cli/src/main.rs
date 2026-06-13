@@ -31,6 +31,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let auto = cli.yes;
 
+    // Restore terminal state on Ctrl+C so raw mode is not left active.
+    ctrlc::set_handler(|| {
+        crossterm::terminal::disable_raw_mode().ok();
+        std::process::exit(130);
+    })?;
+
     // Interactive commands need a terminal for prompts (dialoguer reads /dev/tty).
     // Detect up front so users get one clear message instead of a prompt crash.
     let interactive_command = matches!(

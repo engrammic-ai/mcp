@@ -24,10 +24,9 @@ $SumUrl = "$ReleaseBase/$Binary-$Target.exe.sha256"
 $TmpBin = Join-Path $env:TEMP "$Binary-$Target-$PID.exe"
 $TmpSum = Join-Path $env:TEMP "$Binary-$Target-$PID.sha256"
 
-Write-Host "=> Downloading $Binary-$Target.exe..."
+Write-Host "=> Downloading installer (1/2)..."
 Invoke-WebRequest -Uri $BinUrl -OutFile $TmpBin -UseBasicParsing
-
-Write-Host "=> Downloading checksum..."
+Write-Host "=> Downloading checksum (2/2)..."
 Invoke-WebRequest -Uri $SumUrl -OutFile $TmpSum -UseBasicParsing
 
 # ── SHA256 verification ───────────────────────────────────────────────────────
@@ -79,6 +78,9 @@ if (($UserPath -split ';') -notcontains $InstallDir) {
 # ── Exec the installed binary with passthrough args ───────────────────────────
 # The binary needs a subcommand first: bare flags like `-y` mean `install -y`,
 # while a leading word like `selfhost` is taken as the subcommand itself.
+Write-Host ""
+Write-Host "=> Running installer..." -ForegroundColor Cyan
+
 if ($args.Count -eq 0) {
     & $InstalledBin install
 } elseif ($args[0] -like '-*') {
@@ -86,3 +88,6 @@ if ($args.Count -eq 0) {
 } else {
     & $InstalledBin @args
 }
+
+Write-Host ""
+Write-Host "=> Installation complete!" -ForegroundColor Green

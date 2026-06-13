@@ -15,6 +15,10 @@ docker compose ps
 docker compose logs -f app
 ```
 
+## Skills Catalog
+
+Browse available MCP skills at [engrammic.ai/skills](https://engrammic.ai/skills). Skills are installed to `~/.agents/skills/` and work across Claude Code, Codex, Gemini, and other agent harnesses.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and set:
@@ -83,6 +87,38 @@ Check health:
 ```bash
 curl http://localhost:8000/health
 ```
+
+## Podman Support
+
+Engrammic supports Podman via the Docker-compatible socket:
+
+```bash
+# Start the Podman socket (run once)
+podman system service --time=0 unix:///tmp/podman.sock &
+export DOCKER_HOST=unix:///tmp/podman.sock
+
+# Then run the installer with --podman flag
+engrammic selfhost --podman
+```
+
+The `--podman` flag:
+- Skips Docker daemon check
+- Uses Podman GPU syntax (CDI) in compose files
+- Adds `:Z` suffix to volumes for SELinux compatibility
+
+## Offline / Airgapped Setup
+
+For environments without internet access, pull images and models before deployment:
+
+```bash
+# Pre-pull all required images
+docker compose pull
+
+# For local embedding models, pre-download via Ollama or HuggingFace
+# and set EMBEDDING_MODEL_PATH in .env to the local path
+```
+
+Compose files are generated in the current directory when you run `engrammic selfhost`. You can inspect and modify them before starting services, or commit them to version control for reproducible airgapped deployments.
 
 ## Troubleshooting
 
