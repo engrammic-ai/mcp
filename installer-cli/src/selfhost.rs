@@ -148,6 +148,21 @@ impl Tier {
     }
 }
 
+/// Probe for an existing Ollama instance at the default local address.
+///
+/// Makes a GET request to `http://localhost:11434/api/tags` with a 2-second
+/// timeout. Returns `Some("localhost:11434")` on a successful response,
+/// `None` if Ollama is not running or unreachable.
+pub fn detect_existing_ollama() -> Option<String> {
+    let response = ureq::get("http://localhost:11434/api/tags")
+        .timeout(Duration::from_secs(2))
+        .call();
+    match response {
+        Ok(_) => Some("localhost:11434".to_string()),
+        Err(_) => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SelfHostConfig {
     pub tier: Tier,
@@ -159,6 +174,9 @@ pub struct SelfHostConfig {
     pub embedding_model: String,
     pub embedding_dimensions: u32,
     pub embedding_credential: Option<(String, String)>,
+    /// If true, skip the Ollama Docker container and point OLLAMA_HOST at the
+    /// user's existing local Ollama instance (localhost:11434).
+    pub use_external_ollama: bool,
 }
 
 pub fn run_wizard() -> Result<()> {
@@ -219,6 +237,26 @@ pub fn run_wizard() -> Result<()> {
     // Disk space check - after install_dir and tier are known, before any downloads
     check_disk_space(&install_dir, tier)?;
 
+    // Detect existing Ollama for standalone tiers before any model downloads
+    let use_external_ollama = if tier.is_standalone() {
+        if let Some(addr) = detect_existing_ollama() {
+            println!();
+            println!(
+                "  {} Detected existing Ollama at {}",
+                "✓".green(),
+                addr.cyan()
+            );
+            Confirm::new()
+                .with_prompt("Use existing Ollama instead of Docker container?")
+                .default(true)
+                .interact()?
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
     let config = SelfHostConfig {
         tier,
         license_key,
@@ -229,6 +267,7 @@ pub fn run_wizard() -> Result<()> {
         embedding_model,
         embedding_dimensions,
         embedding_credential,
+        use_external_ollama,
     };
 
     // Step 6: Install
@@ -599,6 +638,32 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
     let Some(model) = config.tier.ollama_model() else {
         return Ok(());
     };
+
+    // TODO(task-1.4): if config.use_external_ollama is true, skip Docker container
+    // spin-up and instead pull the model directly via the external Ollama HTTP API
+    // (POST http://localhost:11434/api/pull) or by shelling out to `ollama pull`.
+    if config.use_external_ollama {
+        println!();
+        println!(
+            "  {} Using existing Ollama - pulling {} directly...",
+            "→".yellow(),
+            model.cyan()
+        );
+        let pull = Command::new("ollama").args(["pull", model]).status();
+        match pull {
+            Ok(status) if status.success() => {
+                println!("  {} Model {} ready", "✓".green(), model);
+            }
+            _ => {
+                println!(
+                    "  {} Could not pull via CLI - run: ollama pull {}",
+                    "!".yellow(),
+                    model
+                );
+            }
+        }
+        return Ok(());
+    }
 
     println!();
     println!("{}", "Downloading Ollama model".bold());
@@ -1099,6 +1164,9 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
 }
 
 fn generate_compose(config: &SelfHostConfig) -> String {
+    // TODO(task-1.4): when config.use_external_ollama is true, strip the `ollama`
+    // service block from the generated compose so no Ollama container is started.
+
     // Select template based on tier
     let template = match config.tier {
         Tier::Lite => docker::COMPOSE_LITE,
@@ -1127,6 +1195,10 @@ fn generate_compose(config: &SelfHostConfig) -> String {
 }
 
 fn generate_env(config: &SelfHostConfig) -> String {
+    // TODO(task-1.4): when config.use_external_ollama is true, append
+    // OLLAMA_HOST=http://localhost:11434 to the generated .env so the app
+    // service connects to the user's existing Ollama instance.
+
     // Build the credential lines for the embedding section
     let credential_lines = match &config.embedding_credential {
         Some((var, val)) if var == "VERTEX" => {
