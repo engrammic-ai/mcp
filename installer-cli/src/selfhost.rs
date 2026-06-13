@@ -234,13 +234,26 @@ fn check_prerequisites() -> Result<()> {
     if !docker::check_docker()? {
         println!("{}", "not found".red());
         println!();
-        fmt_err(
-            "Docker is not running or not installed.",
-            &format!(
-                "Install Docker Desktop from {} then try again.",
+        let docker_hint = match std::env::consts::OS {
+            "linux" => format!(
+                "Run {} then start Docker, or see {}",
+                "curl -fsSL https://get.docker.com | sh".cyan(),
+                "https://docs.docker.com/engine/install/".cyan()
+            ),
+            "macos" => format!(
+                "Install Docker Desktop from {}",
+                "https://docker.com/products/docker-desktop".cyan()
+            ),
+            "windows" => format!(
+                "Install Docker Desktop with WSL2 backend from {}",
+                "https://docker.com/products/docker-desktop".cyan()
+            ),
+            _ => format!(
+                "Install Docker from {}",
                 "https://docs.docker.com/get-docker/".cyan()
             ),
-        );
+        };
+        fmt_err("Docker is not running or not installed.", &docker_hint);
         anyhow::bail!("Docker is not running or not installed");
     }
     println!("{}", "ok".green());
@@ -257,10 +270,19 @@ fn check_prerequisites() -> Result<()> {
         _ => {
             println!("{}", "not found".red());
             println!();
-            fmt_err(
-                "Docker Compose v2 not found.",
-                "Upgrade Docker Desktop or install the compose plugin, then try again.",
-            );
+            let compose_hint = match std::env::consts::OS {
+                "linux" => format!(
+                    "Install the Compose plugin: {} or upgrade Docker Engine to v23+",
+                    "https://docs.docker.com/compose/install/linux/".cyan()
+                ),
+                "macos" | "windows" => format!(
+                    "Upgrade Docker Desktop to v4.x or later from {}",
+                    "https://docker.com/products/docker-desktop".cyan()
+                ),
+                _ => "Upgrade Docker Desktop or install the Compose plugin, then try again."
+                    .to_string(),
+            };
+            fmt_err("Docker Compose v2 not found.", &compose_hint);
             anyhow::bail!("Docker Compose v2 not found");
         }
     }
