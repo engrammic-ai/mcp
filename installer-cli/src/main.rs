@@ -46,7 +46,7 @@ fn main() -> Result<()> {
             | Commands::Uninstall { .. }
             | Commands::Remove { .. }
             | Commands::Skills
-            | Commands::Selfhost
+            | Commands::Selfhost { .. }
             | Commands::Docker
             | Commands::License
     );
@@ -81,8 +81,8 @@ fn main() -> Result<()> {
         Commands::Uninstall { purge_data } => uninstall(auto, purge_data, cli.tool.as_deref()),
         Commands::Status => status(),
         Commands::Skills => install_skills_only(auto, cli.skill_path.as_deref()),
-        Commands::Selfhost => selfhost::run_wizard(),
-        Commands::Docker => selfhost::run_wizard(),
+        Commands::Selfhost { podman } => selfhost::run_wizard(podman),
+        Commands::Docker => selfhost::run_wizard(false),
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
@@ -284,7 +284,7 @@ fn handle_returning_user(
         "Start fresh (reconfigure everything)" => {
             let endpoint = match select_deployment_mode(&config)? {
                 DeploymentChoice::Cloud(ep) => ep,
-                DeploymentChoice::SelfHost => return selfhost::run_wizard(),
+                DeploymentChoice::SelfHost => return selfhost::run_wizard(false),
             };
             run_full_install(endpoint, false, tool_id, skill_path)?;
         }
@@ -317,7 +317,7 @@ fn install(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Resul
     } else {
         match select_deployment_mode(&existing_config)? {
             DeploymentChoice::Cloud(ep) => ep,
-            DeploymentChoice::SelfHost => return selfhost::run_wizard(),
+            DeploymentChoice::SelfHost => return selfhost::run_wizard(false),
         }
     };
 

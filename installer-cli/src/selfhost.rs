@@ -184,10 +184,20 @@ pub struct SelfHostConfig {
     /// If true, skip the Ollama Docker container and point OLLAMA_HOST at the
     /// user's existing local Ollama instance (localhost:11434).
     pub use_external_ollama: bool,
+    /// If true, use Podman-compatible compose output: skip Docker daemon check,
+    /// add :Z SELinux suffix to volume mounts, use CDI GPU syntax.
+    pub podman: bool,
 }
 
-pub fn run_wizard() -> Result<()> {
+pub fn run_wizard(podman: bool) -> Result<()> {
     print_welcome();
+
+    if podman {
+        println!();
+        println!("  {} Podman mode enabled. Make sure to start the socket:", "!".yellow());
+        println!("    podman system service --time=0 unix:///tmp/podman.sock &");
+        println!("    export DOCKER_HOST=unix:///tmp/podman.sock");
+    }
 
     // Step 1: Hardware Profile (Tier Selection)
     println!();
@@ -204,7 +214,12 @@ pub fn run_wizard() -> Result<()> {
     println!();
     println!("{}", "Step 2/6: Prerequisites".bold());
     println!();
-    check_prerequisites()?;
+    if podman {
+        println!("  {} Podman mode: skipping Docker daemon check.", "→".yellow());
+        check_prerequisites_podman()?;
+    } else {
+        check_prerequisites()?;
+    }
 
     // Step 3: License
     println!();
@@ -278,6 +293,7 @@ pub fn run_wizard() -> Result<()> {
         embedding_dimensions,
         embedding_credential,
         use_external_ollama,
+        podman,
     };
 
     // Step 6: Install
@@ -418,6 +434,57 @@ fn check_prerequisites() -> Result<()> {
     }
 
     // Memory check
+    print!("  Checking available memory... ");
+    let mem_gb = get_available_memory_gb();
+    if mem_gb < 4.0 {
+        println!("{} ({:.1} GB)", "low".yellow(), mem_gb);
+        println!(
+            "  {} Engrammic needs ~5GB RAM. Performance may be degraded.",
+            "!".yellow()
+        );
+    } else {
+        println!("{} ({:.1} GB)", "ok".green(), mem_gb);
+    }
+
+    Ok(())
+}
+
+/// Prerequisite check for Podman mode: skip Docker daemon check, verify
+/// `podman compose` or `docker compose` (via DOCKER_HOST socket) is available.
+fn check_prerequisites_podman() -> Result<()> {
+    // Check podman compose availability
+    print!("  Checking podman compose... ");
+    let podman_compose = Command::new("podman").args(["compose", "version"]).output();
+    match podman_compose {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let version_short = version.trim().split_whitespace().last().unwrap_or("ok");
+            println!("{} ({})", "ok".green(), version_short.dimmed());
+        }
+        _ => {
+            // Fall back to docker compose via socket
+            print!("not found — checking docker compose via socket... ");
+            let compose_check = Command::new("docker").args(["compose", "version"]).output();
+            match compose_check {
+                Ok(output) if output.status.success() => {
+                    let version = String::from_utf8_lossy(&output.stdout);
+                    let version_short = version.trim().split_whitespace().last().unwrap_or("v2");
+                    println!("{} ({})", "ok".green(), version_short.dimmed());
+                }
+                _ => {
+                    println!("{}", "not found".red());
+                    println!();
+                    fmt_err(
+                        "Neither podman compose nor docker compose found.",
+                        "Install podman-compose, or set DOCKER_HOST and ensure docker compose is available.",
+                    );
+                    anyhow::bail!("No compose tool found for Podman mode");
+                }
+            }
+        }
+    }
+
+    // Memory check (same as Docker path)
     print!("  Checking available memory... ");
     let mem_gb = get_available_memory_gb();
     if mem_gb < 4.0 {
@@ -1360,7 +1427,115 @@ fn generate_compose(config: &SelfHostConfig) -> String {
             .replace("standalone-pro.env", ".env");
     }
 
+    // Podman adaptations
+    if config.podman {
+        // Add :Z SELinux label to all named volume mounts.
+        // Named volumes look like `- name:/path` in YAML list form.
+        // We match the pattern `      - <name>:<path>` (6 spaces, list item).
+        compose = add_selinux_z_to_volumes(&compose);
+
+        // Swap Docker GPU syntax for Podman CDI syntax.
+        // The templates have the GPU section commented out; replace the comment
+        // block with an active Podman devices entry.
+        compose = swap_gpu_syntax_for_podman(&compose);
+    }
+
     compose
+}
+
+/// Add `:Z` SELinux label to named volume mounts in a compose string.
+///
+/// Targets lines of the form `      - <volume-name>:<container-path>` where
+/// the left side is a Docker named volume (no leading `/` or `.`). Bind mounts
+/// with absolute or relative host paths are left unchanged.
+fn add_selinux_z_to_volumes(compose: &str) -> String {
+    compose
+        .lines()
+        .map(|line| {
+            // Match a YAML list entry that looks like a named volume mount:
+            // e.g. `      - ollama-models:/root/.ollama`
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("- ") {
+                let rest = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+                // Named volume: no leading `/`, `./`, or `../`
+                if !rest.starts_with('/')
+                    && !rest.starts_with("./")
+                    && !rest.starts_with("../")
+                    && rest.contains(':')
+                    && !rest.ends_with(":Z")
+                    && !rest.ends_with(":z")
+                {
+                    // Only touch lines where the left side looks like a named
+                    // volume (alphanumeric, hyphens, underscores).
+                    let volume_name = rest.split(':').next().unwrap_or("");
+                    if volume_name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    {
+                        let indent: String = line
+                            .chars()
+                            .take_while(|c| c.is_whitespace())
+                            .collect();
+                        return format!("{}- {}:Z", indent, rest.trim_end());
+                    }
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Replace the Docker NVIDIA GPU comment block in a compose string with active
+/// Podman CDI device syntax.
+///
+/// The templates contain a commented-out Docker GPU block of the form:
+/// ```yaml
+/// # For GPU acceleration, uncomment:
+/// #   reservations:
+/// #     devices:
+/// #       - driver: nvidia
+/// #         count: all
+/// #         capabilities: [gpu]
+/// ```
+///
+/// This is replaced with an active Podman CDI entry:
+/// ```yaml
+///     devices:
+///       - nvidia.com/gpu=all
+/// ```
+fn swap_gpu_syntax_for_podman(compose: &str) -> String {
+    // The comment block spans multiple lines. We replace it with the Podman
+    // CDI device stanza using a simple multi-line string replacement.
+    //
+    // Docker GPU block (commented out in templates, 4-space service indent):
+    //
+    //     # For GPU acceleration, uncomment:
+    //     #   reservations:
+    //     #     devices:
+    //     #       - driver: nvidia
+    //     #         count: all
+    //     #         capabilities: [gpu]
+    //
+    // Replaced with active Podman CDI syntax at the same indent level:
+    //
+    //     # GPU (Podman CDI syntax):
+    //     devices:
+    //       - nvidia.com/gpu=all
+    let docker_comment_block = concat!(
+        "    # For GPU acceleration, uncomment:\n",
+        "    #   reservations:\n",
+        "    #     devices:\n",
+        "    #       - driver: nvidia\n",
+        "    #         count: all\n",
+        "    #         capabilities: [gpu]"
+    );
+    let podman_gpu_stanza = concat!(
+        "    # GPU (Podman CDI syntax):\n",
+        "    devices:\n",
+        "      - nvidia.com/gpu=all"
+    );
+    compose.replace(docker_comment_block, podman_gpu_stanza)
 }
 
 fn generate_env(config: &SelfHostConfig) -> String {
