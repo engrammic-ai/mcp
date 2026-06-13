@@ -90,6 +90,13 @@ fn warn_gpu_for_tier(tier: Tier, gpu: &Option<GpuInfo>) {
                 info.vram_gb()
             );
         }
+        (Tier::Standard, Some(info)) if info.vram_mb < 8 * 1024 => {
+            println!(
+                "  {} Standard tier recommends 8GB+ VRAM, detected {:.0}GB.",
+                "!".yellow(),
+                info.vram_gb()
+            );
+        }
         (_, Some(info)) => {
             println!(
                 "  {} GPU detected: {:.0}GB VRAM",
@@ -463,7 +470,8 @@ fn get_available_memory_gb() -> f64 {
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         eprintln!(
-            "\x1b[33mwarning: memory detection not supported on this platform; assuming 8 GB\x1b[0m"
+            "{}",
+            "warning: memory detection not supported on this platform; assuming 8 GB".yellow()
         );
     }
     8.0 // fallback assumption
@@ -1041,11 +1049,6 @@ fn is_port_in_use(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 
-/// Returns true if the port can be bound (i.e., nothing is using it).
-fn check_port_available(port: u16) -> bool {
-    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
 /// Default port assignments for each service.
 #[derive(Debug, Clone)]
 pub struct PortConfig {
@@ -1107,7 +1110,7 @@ fn check_and_warn_ports(tier: Tier) -> PortConfig {
     checks.sort_by_key(|(port, _)| *port);
 
     for (port, label) in checks {
-        if check_port_available(port) {
+        if !is_port_in_use(port) {
             println!("  {} {} ({}) available", "✓".green(), port, label);
         } else {
             println!(
