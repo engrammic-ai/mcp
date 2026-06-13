@@ -46,7 +46,14 @@ pub enum Commands {
     /// Install skills only (no MCP config changes)
     Skills,
     /// Guided self-hosted setup wizard
-    Selfhost,
+    Selfhost {
+        /// Use Podman instead of Docker (skips Docker daemon check, adds SELinux volume labels,
+        /// uses CDI GPU syntax). Start the socket first:
+        ///   podman system service --time=0 unix:///tmp/podman.sock &
+        ///   export DOCKER_HOST=unix:///tmp/podman.sock
+        #[arg(long)]
+        podman: bool,
+    },
     /// Alias for 'selfhost' (kept for compatibility)
     #[command(hide = true)]
     Docker,

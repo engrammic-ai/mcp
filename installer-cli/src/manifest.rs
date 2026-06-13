@@ -42,6 +42,19 @@ pub struct SkillEntry {
     pub scope: String,
 }
 
+/// Installation status written into the manifest.
+///
+/// `Partial` is set when installation begins. `Complete` is set only after the
+/// full install flow finishes successfully. A manifest left as `Partial`
+/// indicates an interrupted install that can be resumed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallStatus {
+    #[default]
+    Partial,
+    Complete,
+}
+
 /// Single source of truth for everything the installer has done on this machine.
 /// Stored at ~/.engrammic/state.toml; written atomically (tmp + rename).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +72,11 @@ pub struct Manifest {
     pub harnesses: Vec<HarnessEntry>,
     #[serde(default)]
     pub skills: Vec<SkillEntry>,
+    /// Whether the last installation completed fully. Set to `partial` at the
+    /// start of installation and only changed to `complete` once the entire flow
+    /// succeeds. Old manifests without this field deserialize to `partial`.
+    #[serde(default)]
+    pub status: InstallStatus,
 }
 
 impl Default for Manifest {
@@ -71,6 +89,7 @@ impl Default for Manifest {
             binary_path: None,
             harnesses: Vec::new(),
             skills: Vec::new(),
+            status: InstallStatus::Partial,
         }
     }
 }

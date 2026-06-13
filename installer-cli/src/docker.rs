@@ -62,6 +62,23 @@ pub const COMPOSE_LITE: &str = include_str!("../assets/docker-compose.lite.yml")
 pub const COMPOSE_STANDARD: &str = include_str!("../assets/docker-compose.standard.yml");
 pub const COMPOSE_PRO: &str = include_str!("../assets/docker-compose.pro.yml");
 
+/// Get list of services from a compose file using docker compose.
+fn get_compose_services(file: &Path) -> Result<Vec<String>> {
+    let output = Command::new("docker")
+        .args(["compose", "-f", file.to_str().unwrap(), "config", "--services"])
+        .output()
+        .context("Failed to run docker compose config")?;
+
+    if !output.status.success() {
+        anyhow::bail!("docker compose config failed");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.to_string())
+        .collect())
+}
+
 /// Check if the current compose file differs from the embedded template.
 /// Returns list of new services if template has services the current file doesn't.
 pub fn check_compose_updates(dir: &Path) -> Result<Option<Vec<String>>> {
@@ -71,25 +88,24 @@ pub fn check_compose_updates(dir: &Path) -> Result<Option<Vec<String>>> {
         return Ok(None);
     }
 
-    let current = fs::read_to_string(&compose_path)?;
+    let current_services = get_compose_services(&compose_path)?;
 
-    // Simple service detection: look for "  servicename:" pattern
-    let current_services: Vec<&str> = current
-        .lines()
-        .filter(|l| l.starts_with("  ") && l.ends_with(":") && !l.contains("#"))
-        .filter_map(|l| l.trim().strip_suffix(':'))
-        .collect();
-
-    let template_services: Vec<&str> = COMPOSE_TEMPLATE
-        .lines()
-        .filter(|l| l.starts_with("  ") && l.ends_with(":") && !l.contains("#"))
-        .filter_map(|l| l.trim().strip_suffix(':'))
-        .collect();
+    // Write the embedded template to a temp file so docker compose can parse it.
+    let tmp_path = std::env::temp_dir().join(format!(
+        "engrammic-compose-template-{}.yml",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
+    fs::write(&tmp_path, COMPOSE_TEMPLATE).context("Failed to write template to temp file")?;
+    let template_services = get_compose_services(&tmp_path);
+    let _ = fs::remove_file(&tmp_path);
+    let template_services = template_services?;
 
     let new_services: Vec<String> = template_services
-        .iter()
+        .into_iter()
         .filter(|s| !current_services.contains(s))
-        .map(|s| s.to_string())
         .collect();
 
     if new_services.is_empty() {

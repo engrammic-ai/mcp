@@ -12,6 +12,64 @@ use crate::license;
 use crate::tools::Tool;
 use crate::user_config::UserConfig;
 
+/// Wizard step enum for step-based navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WizardStep {
+    Runtime,
+    Tier,
+    Prerequisites,
+    License,
+    Embeddings,
+    Config,
+    Install,
+}
+
+impl WizardStep {
+    fn number(&self) -> usize {
+        match self {
+            WizardStep::Runtime => 1,
+            WizardStep::Tier => 2,
+            WizardStep::Prerequisites => 3,
+            WizardStep::License => 4,
+            WizardStep::Embeddings => 5,
+            WizardStep::Config => 6,
+            WizardStep::Install => 7,
+        }
+    }
+
+    fn total() -> usize {
+        7
+    }
+
+
+}
+
+/// Intermediate state accumulating wizard choices across steps.
+/// Fields are Option so that going back clears future selections.
+#[derive(Debug, Default)]
+struct WizardState {
+    podman: bool,
+    tier: Option<Tier>,
+    license_key: Option<String>,
+    embedding_model: Option<String>,
+    embedding_dimensions: Option<u32>,
+    embedding_credential: Option<Option<(String, String)>>,
+    install_dir: Option<PathBuf>,
+    port: Option<u16>,
+    dagster_port: Option<u16>,
+    postgres_password: Option<String>,
+    use_external_ollama: Option<bool>,
+}
+
+/// Ask the user whether to go back. Returns true if they want to go back.
+fn prompt_go_back() -> Result<bool> {
+    let input: String = Input::new()
+        .with_prompt("Press Enter to continue, or type 'b' to go back")
+        .allow_empty(true)
+        .interact_text()?;
+    Ok(input.trim().eq_ignore_ascii_case("b"))
+}
+
 /// Print a two-line error in the standard ✗ / → format.
 ///
 ///   ✗ <what_happened>
@@ -25,6 +83,89 @@ fn fmt_err(what_happened: &str, what_to_do: &str) {
 
 const DEFAULT_PORT: u16 = 8000;
 const DEFAULT_DAGSTER_PORT: u16 = 3000;
+
+/// Basic GPU information returned by nvidia-smi.
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+    pub vram_mb: u64,
+}
+
+impl GpuInfo {
+    pub fn vram_gb(&self) -> f64 {
+        self.vram_mb as f64 / 1024.0
+    }
+}
+
+/// Probe the system for an NVIDIA GPU via nvidia-smi.
+///
+/// Returns `None` if nvidia-smi is not found, fails, or produces unparseable
+/// output. Returns `Some(GpuInfo)` on success. Failures are silent — callers
+/// treat absence of a GPU as a warning condition, not an error.
+pub fn check_gpu() -> Option<GpuInfo> {
+    let output = Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // nvidia-smi may report multiple GPUs, one per line. Use the first.
+    let first_line = stdout.lines().next()?.trim();
+    let vram_mb: u64 = first_line.parse().ok()?;
+
+    Some(GpuInfo { vram_mb })
+}
+
+/// Print GPU status or warnings after tier selection.
+///
+/// Warnings are informational only — they do not abort the installation.
+fn warn_gpu_for_tier(tier: Tier, gpu: &Option<GpuInfo>) {
+    println!();
+    match (tier, gpu) {
+        (Tier::Standard, None) => {
+            println!(
+                "  {} No GPU detected. Standard tier works best with GPU (8GB+ VRAM).",
+                "!".yellow()
+            );
+            println!("    CPU-only inference will be slower but functional.");
+        }
+        (Tier::Pro, None) => {
+            println!(
+                "  {} No GPU detected. Pro tier recommends GPU (16GB+ VRAM) for gemma4:26b.",
+                "!".yellow()
+            );
+            println!("    CPU-only inference will be slower but functional.");
+        }
+        (Tier::Pro, Some(info)) if info.vram_mb < 16 * 1024 => {
+            println!(
+                "  {} Pro tier recommends 16GB+ VRAM, detected {:.0}GB.",
+                "!".yellow(),
+                info.vram_gb()
+            );
+        }
+        (Tier::Standard, Some(info)) if info.vram_mb < 8 * 1024 => {
+            println!(
+                "  {} Standard tier recommends 8GB+ VRAM, detected {:.0}GB.",
+                "!".yellow(),
+                info.vram_gb()
+            );
+        }
+        (_, Some(info)) => {
+            println!(
+                "  {} GPU detected: {:.0}GB VRAM",
+                "✓".green(),
+                info.vram_gb()
+            );
+        }
+        // Lite and Cloud: no GPU advice needed.
+        _ => {}
+    }
+}
 
 /// Hardware tier for standalone deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +213,21 @@ impl Tier {
     }
 }
 
+/// Probe for an existing Ollama instance at the default local address.
+///
+/// Makes a GET request to `http://localhost:11434/api/tags` with a 2-second
+/// timeout. Returns `Some("localhost:11434")` on a successful response,
+/// `None` if Ollama is not running or unreachable.
+pub fn detect_existing_ollama() -> Option<String> {
+    let response = ureq::get("http://localhost:11434/api/tags")
+        .timeout(Duration::from_secs(2))
+        .call();
+    match response {
+        Ok(_) => Some("localhost:11434".to_string()),
+        Err(_) => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SelfHostConfig {
     pub tier: Tier,
@@ -83,119 +239,366 @@ pub struct SelfHostConfig {
     pub embedding_model: String,
     pub embedding_dimensions: u32,
     pub embedding_credential: Option<(String, String)>,
+    /// If true, skip the Ollama Docker container and point OLLAMA_HOST at the
+    /// user's existing local Ollama instance (localhost:11434).
+    pub use_external_ollama: bool,
+    /// If true, use Podman-compatible compose output: skip Docker daemon check,
+    /// add :Z SELinux suffix to volume mounts, use CDI GPU syntax.
+    pub podman: bool,
 }
 
-pub fn run_wizard() -> Result<()> {
+pub fn run_wizard(podman: bool) -> Result<()> {
     print_welcome();
 
-    // Step 1: Hardware Profile (Tier Selection)
-    println!();
-    println!("{}", "Step 1/6: Hardware Profile".bold());
-    println!();
-    let tier = prompt_tier()?;
-
-    // Step 2: Prerequisites
-    println!();
-    println!("{}", "Step 2/6: Prerequisites".bold());
-    println!();
-    check_prerequisites()?;
-
-    // Step 3: License
-    println!();
-    println!("{}", "Step 3/6: License".bold());
-    println!();
-    let license_key_opt = prompt_license()?;
-    let license_key = license_key_opt.unwrap_or_default();
-    // If empty: the .env will have ENGRAMMIC_LICENSE_KEY= (blank); the user must run
-    // `engrammic license` before Engrammic will accept connections. The wizard
-    // continues so the rest of the setup is not lost.
-
-    // Step 4: Embeddings (skip for standalone tiers - they use TEI)
-    let (embedding_model, embedding_dimensions, embedding_credential) = if tier.is_standalone() {
-        println!();
-        println!("{}", "Step 4/6: Embeddings".bold());
-        println!();
-        println!(
-            "  {} Using TEI with nomic-embed (768 dims) - bundled with {} tier",
-            "✓".green(),
-            format!("{:?}", tier).to_lowercase()
-        );
-        ("tei/nomic-ai/nomic-embed-text-v1.5".to_string(), 768, None)
-    } else {
-        println!();
-        println!("{}", "Step 4/6: Embeddings".bold());
-        println!();
-        prompt_embeddings()?
+    // Initialise state. If --podman was passed on the CLI, pre-set it so the
+    // runtime step shows Podman as already selected and skips the prompt.
+    let mut state = WizardState {
+        podman,
+        ..Default::default()
     };
 
-    // Step 5: Configuration
-    println!();
-    println!("{}", "Step 5/6: Configuration".bold());
-    println!();
-    let install_dir = prompt_install_dir()?;
-    let existing_ports = read_existing_ports(&install_dir);
-    let port = prompt_port(existing_ports.0)?;
-    let dagster_port = prompt_dagster_port(port, existing_ports.1)?;
-    let postgres_password = prompt_postgres_password()?;
+    let mut step = WizardStep::Runtime;
 
-    let config = SelfHostConfig {
-        tier,
-        license_key,
-        port,
-        dagster_port,
-        install_dir,
-        postgres_password,
-        embedding_model,
-        embedding_dimensions,
-        embedding_credential,
-    };
+    loop {
+        match step {
+            // ----------------------------------------------------------------
+            // Step 1: Container runtime (Docker vs Podman)
+            // ----------------------------------------------------------------
+            WizardStep::Runtime => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Container Runtime",
+                        WizardStep::Runtime.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
 
-    // Step 6: Install
-    println!();
-    println!("{}", "Step 6/6: Install".bold());
-    println!();
-    write_config_files(&config)?;
+                if podman {
+                    // --podman flag was provided; skip interactive prompt and
+                    // show the socket instructions as before.
+                    println!("  {} Podman mode enabled (--podman flag).", "!".yellow());
+                    println!("    Make sure to start the socket:");
+                    println!("      podman system service --time=0 unix:///tmp/podman.sock &");
+                    println!("      export DOCKER_HOST=unix:///tmp/podman.sock");
+                    state.podman = true;
+                } else {
+                    let options = vec!["Docker (default)", "Podman"];
+                    let idx = Select::new()
+                        .with_prompt("Container runtime")
+                        .items(&options)
+                        .default(0)
+                        .interact()?;
 
-    // Model download for standalone tiers
-    if tier.is_standalone() {
-        download_models(&config)?;
-    }
+                    state.podman = idx == 1;
 
-    // Offer to start
-    println!();
-    let start_now = Confirm::new()
-        .with_prompt("Start Engrammic now?")
-        .default(true)
-        .interact()?;
+                    if state.podman {
+                        println!();
+                        println!("  {} Podman selected. Make sure to start the socket:", "!".yellow());
+                        println!("    podman system service --time=0 unix:///tmp/podman.sock &");
+                        println!("    export DOCKER_HOST=unix:///tmp/podman.sock");
+                    } else {
+                        println!("  {} Docker selected", "✓".green());
+                    }
+                }
 
-    if start_now {
-        start_and_wait(&config)?;
-        configure_editors(&config)?;
-    } else {
-        print_manual_start_instructions(&config);
-    }
+                // Runtime is always the first step — no going back from here.
+                step = WizardStep::Tier;
+            }
 
-    // Save user config. A skipped license stays None — Some("") would make
-    // doctor and the returning-user menu report an invalid license forever.
-    let user_config = UserConfig {
-        endpoint: Some(format!("http://localhost:{}/mcp", config.port)),
-        license_key: if config.license_key.is_empty() {
-            None
-        } else {
-            Some(config.license_key.clone())
-        },
-        selfhost_dir: Some(config.install_dir.clone()),
-    };
-    user_config.save()?;
+            // ----------------------------------------------------------------
+            // Step 2: Hardware Profile (Tier)
+            // ----------------------------------------------------------------
+            WizardStep::Tier => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Hardware Profile",
+                        WizardStep::Tier.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
 
-    print_quick_reference(&config);
+                let tier = prompt_tier()?;
+                let gpu = check_gpu();
+                warn_gpu_for_tier(tier, &gpu);
 
-    if let Ok(exe) = std::env::current_exe() {
-        println!(
-            "  {} CLI available at {}",
-            "✓".green(),
-            exe.display().to_string().cyan()
-        );
+                println!();
+                check_and_warn_ports(tier);
+
+                state.tier = Some(tier);
+                // Clear downstream state in case user went back and changed tier
+                state.embedding_model = None;
+                state.embedding_dimensions = None;
+                state.embedding_credential = None;
+
+                if prompt_go_back()? {
+                    step = WizardStep::Runtime;
+                } else {
+                    step = WizardStep::Prerequisites;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 3: Prerequisites
+            // ----------------------------------------------------------------
+            WizardStep::Prerequisites => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Prerequisites",
+                        WizardStep::Prerequisites.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                if state.podman {
+                    println!("  {} Podman mode: skipping Docker daemon check.", "→".yellow());
+                    check_prerequisites_podman()?;
+                } else {
+                    check_prerequisites()?;
+                }
+
+                if prompt_go_back()? {
+                    step = WizardStep::Tier;
+                } else {
+                    step = WizardStep::License;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 4: License
+            // ----------------------------------------------------------------
+            WizardStep::License => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: License",
+                        WizardStep::License.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let license_key_opt = prompt_license()?;
+                state.license_key = Some(license_key_opt.unwrap_or_default());
+                // If empty: the .env will have ENGRAMMIC_LICENSE_KEY= (blank); the user must run
+                // `engrammic license` before Engrammic will accept connections. The wizard
+                // continues so the rest of the setup is not lost.
+
+                if prompt_go_back()? {
+                    step = WizardStep::Prerequisites;
+                } else {
+                    step = WizardStep::Embeddings;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 5: Embeddings
+            // ----------------------------------------------------------------
+            WizardStep::Embeddings => {
+                let tier = state.tier.expect("tier must be set before embeddings step");
+
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Embeddings",
+                        WizardStep::Embeddings.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let (embedding_model, embedding_dimensions, embedding_credential) =
+                    if tier.is_standalone() {
+                        println!(
+                            "  {} Using TEI with nomic-embed (768 dims) - bundled with {} tier",
+                            "✓".green(),
+                            format!("{:?}", tier).to_lowercase()
+                        );
+                        (
+                            "tei/nomic-ai/nomic-embed-text-v1.5".to_string(),
+                            768u32,
+                            None,
+                        )
+                    } else {
+                        prompt_embeddings()?
+                    };
+
+                state.embedding_model = Some(embedding_model);
+                state.embedding_dimensions = Some(embedding_dimensions);
+                state.embedding_credential = Some(embedding_credential);
+
+                if prompt_go_back()? {
+                    step = WizardStep::License;
+                } else {
+                    step = WizardStep::Config;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 6: Configuration (ports, install dir, password)
+            // ----------------------------------------------------------------
+            WizardStep::Config => {
+                let tier = state.tier.expect("tier must be set before config step");
+
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Configuration",
+                        WizardStep::Config.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let install_dir = prompt_install_dir()?;
+                let existing_ports = read_existing_ports(&install_dir);
+                let port = prompt_port(existing_ports.0)?;
+                let dagster_port = prompt_dagster_port(port, existing_ports.1)?;
+                let postgres_password = prompt_postgres_password()?;
+
+                // Disk space check - after install_dir and tier are known, before any downloads
+                check_disk_space(&install_dir, tier)?;
+
+                // Detect existing Ollama for standalone tiers before any model downloads
+                let use_external_ollama = if tier.is_standalone() {
+                    if let Some(addr) = detect_existing_ollama() {
+                        println!();
+                        println!(
+                            "  {} Detected existing Ollama at {}",
+                            "✓".green(),
+                            addr.cyan()
+                        );
+                        Confirm::new()
+                            .with_prompt("Use existing Ollama instead of Docker container?")
+                            .default(true)
+                            .interact()?
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                state.install_dir = Some(install_dir);
+                state.port = Some(port);
+                state.dagster_port = Some(dagster_port);
+                state.postgres_password = Some(postgres_password);
+                state.use_external_ollama = Some(use_external_ollama);
+
+                if prompt_go_back()? {
+                    step = WizardStep::Embeddings;
+                } else {
+                    step = WizardStep::Install;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 7: Install
+            // ----------------------------------------------------------------
+            WizardStep::Install => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Install",
+                        WizardStep::Install.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let tier = state.tier.expect("tier must be set");
+                let config = SelfHostConfig {
+                    tier,
+                    license_key: state.license_key.clone().unwrap_or_default(),
+                    port: state.port.expect("port must be set"),
+                    dagster_port: state.dagster_port.expect("dagster_port must be set"),
+                    install_dir: state.install_dir.clone().expect("install_dir must be set"),
+                    postgres_password: state
+                        .postgres_password
+                        .clone()
+                        .expect("postgres_password must be set"),
+                    embedding_model: state
+                        .embedding_model
+                        .clone()
+                        .expect("embedding_model must be set"),
+                    embedding_dimensions: state
+                        .embedding_dimensions
+                        .expect("embedding_dimensions must be set"),
+                    embedding_credential: state
+                        .embedding_credential
+                        .clone()
+                        .expect("embedding_credential must be set"),
+                    use_external_ollama: state.use_external_ollama.unwrap_or(false),
+                    podman: state.podman,
+                };
+
+                write_config_files(&config)?;
+
+                // Model download for standalone tiers
+                if tier.is_standalone() {
+                    download_models(&config)?;
+                }
+
+                // Offer to start
+                println!();
+                let start_now = Confirm::new()
+                    .with_prompt("Start Engrammic now?")
+                    .default(true)
+                    .interact()?;
+
+                if start_now {
+                    start_and_wait(&config)?;
+                    configure_editors(&config)?;
+                } else {
+                    print_manual_start_instructions(&config);
+                }
+
+                // Save user config. A skipped license stays None — Some("") would make
+                // doctor and the returning-user menu report an invalid license forever.
+                let user_config = UserConfig {
+                    endpoint: Some(format!("http://localhost:{}/mcp", config.port)),
+                    license_key: if config.license_key.is_empty() {
+                        None
+                    } else {
+                        Some(config.license_key.clone())
+                    },
+                    selfhost_dir: Some(config.install_dir.clone()),
+                };
+                user_config.save()?;
+
+                print_quick_reference(&config);
+
+                if let Ok(exe) = std::env::current_exe() {
+                    println!(
+                        "  {} CLI available at {}",
+                        "✓".green(),
+                        exe.display().to_string().cyan()
+                    );
+                }
+
+                // Wizard complete — exit the loop
+                break;
+            }
+        }
     }
 
     Ok(())
@@ -219,12 +622,15 @@ fn print_welcome() {
     );
     println!();
     println!("  This wizard will:");
-    println!("    1. Select hardware tier (Lite/Standard/Pro/Cloud)");
-    println!("    2. Check Docker is running");
-    println!("    3. Validate your license");
-    println!("    4. Configure embeddings (auto for standalone tiers)");
-    println!("    5. Configure ports and storage");
-    println!("    6. Download models and start services");
+    println!("    1. Select container runtime (Docker or Podman)");
+    println!("    2. Select hardware tier (Lite/Standard/Pro/Cloud)");
+    println!("    3. Check runtime prerequisites");
+    println!("    4. Validate your license");
+    println!("    5. Configure embeddings (auto for standalone tiers)");
+    println!("    6. Configure ports and storage");
+    println!("    7. Download models and start services");
+    println!();
+    println!("  {} At any step, type 'b' + Enter to go back.", "tip:".dimmed());
     println!();
 }
 
@@ -234,13 +640,26 @@ fn check_prerequisites() -> Result<()> {
     if !docker::check_docker()? {
         println!("{}", "not found".red());
         println!();
-        fmt_err(
-            "Docker is not running or not installed.",
-            &format!(
-                "Install Docker Desktop from {} then try again.",
+        let docker_hint = match std::env::consts::OS {
+            "linux" => format!(
+                "Run {} then start Docker, or see {}",
+                "curl -fsSL https://get.docker.com | sh".cyan(),
+                "https://docs.docker.com/engine/install/".cyan()
+            ),
+            "macos" => format!(
+                "Install Docker Desktop from {}",
+                "https://docker.com/products/docker-desktop".cyan()
+            ),
+            "windows" => format!(
+                "Install Docker Desktop with WSL2 backend from {}",
+                "https://docker.com/products/docker-desktop".cyan()
+            ),
+            _ => format!(
+                "Install Docker from {}",
                 "https://docs.docker.com/get-docker/".cyan()
             ),
-        );
+        };
+        fmt_err("Docker is not running or not installed.", &docker_hint);
         anyhow::bail!("Docker is not running or not installed");
     }
     println!("{}", "ok".green());
@@ -257,15 +676,75 @@ fn check_prerequisites() -> Result<()> {
         _ => {
             println!("{}", "not found".red());
             println!();
-            fmt_err(
-                "Docker Compose v2 not found.",
-                "Upgrade Docker Desktop or install the compose plugin, then try again.",
-            );
+            let compose_hint = match std::env::consts::OS {
+                "linux" => format!(
+                    "Install the Compose plugin: {} or upgrade Docker Engine to v23+",
+                    "https://docs.docker.com/compose/install/linux/".cyan()
+                ),
+                "macos" | "windows" => format!(
+                    "Upgrade Docker Desktop to v4.x or later from {}",
+                    "https://docker.com/products/docker-desktop".cyan()
+                ),
+                _ => "Upgrade Docker Desktop or install the Compose plugin, then try again."
+                    .to_string(),
+            };
+            fmt_err("Docker Compose v2 not found.", &compose_hint);
             anyhow::bail!("Docker Compose v2 not found");
         }
     }
 
     // Memory check
+    print!("  Checking available memory... ");
+    let mem_gb = get_available_memory_gb();
+    if mem_gb < 4.0 {
+        println!("{} ({:.1} GB)", "low".yellow(), mem_gb);
+        println!(
+            "  {} Engrammic needs ~5GB RAM. Performance may be degraded.",
+            "!".yellow()
+        );
+    } else {
+        println!("{} ({:.1} GB)", "ok".green(), mem_gb);
+    }
+
+    Ok(())
+}
+
+/// Prerequisite check for Podman mode: skip Docker daemon check, verify
+/// `podman compose` or `docker compose` (via DOCKER_HOST socket) is available.
+fn check_prerequisites_podman() -> Result<()> {
+    // Check podman compose availability
+    print!("  Checking podman compose... ");
+    let podman_compose = Command::new("podman").args(["compose", "version"]).output();
+    match podman_compose {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let version_short = version.trim().split_whitespace().last().unwrap_or("ok");
+            println!("{} ({})", "ok".green(), version_short.dimmed());
+        }
+        _ => {
+            // Fall back to docker compose via socket
+            print!("not found — checking docker compose via socket... ");
+            let compose_check = Command::new("docker").args(["compose", "version"]).output();
+            match compose_check {
+                Ok(output) if output.status.success() => {
+                    let version = String::from_utf8_lossy(&output.stdout);
+                    let version_short = version.trim().split_whitespace().last().unwrap_or("v2");
+                    println!("{} ({})", "ok".green(), version_short.dimmed());
+                }
+                _ => {
+                    println!("{}", "not found".red());
+                    println!();
+                    fmt_err(
+                        "Neither podman compose nor docker compose found.",
+                        "Install podman-compose, or set DOCKER_HOST and ensure docker compose is available.",
+                    );
+                    anyhow::bail!("No compose tool found for Podman mode");
+                }
+            }
+        }
+    }
+
+    // Memory check (same as Docker path)
     print!("  Checking available memory... ");
     let mem_gb = get_available_memory_gb();
     if mem_gb < 4.0 {
@@ -306,7 +785,112 @@ fn get_available_memory_gb() -> f64 {
             }
         }
     }
+    #[cfg(target_os = "windows")]
+    {
+        use sysinfo::System;
+        let sys = System::new_all();
+        let bytes = sys.total_memory();
+        if bytes > 0 {
+            return bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        eprintln!(
+            "{}",
+            "warning: memory detection not supported on this platform; assuming 8 GB".yellow()
+        );
+    }
     8.0 // fallback assumption
+}
+
+/// Minimum disk space required for each tier, in gigabytes.
+fn get_required_disk_gb(tier: Tier) -> u64 {
+    match tier {
+        Tier::Lite => 8,
+        Tier::Standard => 20,
+        Tier::Pro => 30,
+        Tier::Cloud => 2,
+    }
+}
+
+/// Print a download breakdown for standalone tiers and verify available disk space.
+///
+/// Returns an error if the path's filesystem has less free space than the tier requires.
+fn check_disk_space(path: &Path, tier: Tier) -> Result<()> {
+    // Ensure the path exists so fs2 can stat it. If not yet created, walk up to
+    // the first ancestor that exists (the install_dir may not exist yet).
+    let stat_path = {
+        let mut p = path;
+        loop {
+            if p.exists() {
+                break p;
+            }
+            match p.parent() {
+                Some(parent) => p = parent,
+                None => break p,
+            }
+        }
+    };
+
+    let available_bytes = fs2::available_space(stat_path)
+        .with_context(|| format!("Could not read available disk space for {}", stat_path.display()))?;
+    let available_gb = available_bytes / 1_073_741_824; // bytes -> GB (floor)
+
+    let required_gb = get_required_disk_gb(tier);
+
+    // Print breakdown
+    println!();
+    match tier {
+        Tier::Lite => {
+            println!("  LLM (phi4-mini):          ~5GB");
+            println!("  Embeddings (TEI):         ~700MB");
+            println!("  Databases + cache:        ~2GB");
+            println!("  Buffer:                   ~300MB");
+        }
+        Tier::Standard => {
+            println!("  LLM (gemma4:12b):         ~8GB");
+            println!("  Embeddings (TEI):         ~700MB");
+            println!("  Reranker (TEI):           ~1GB");
+            println!("  Databases + cache:        ~3GB");
+            println!("  Buffer:                   ~7GB");
+        }
+        Tier::Pro => {
+            println!("  LLM (gemma4:26b):         ~18GB");
+            println!("  Embeddings (TEI):         ~700MB");
+            println!("  Reranker (TEI):           ~1GB");
+            println!("  Databases + cache:        ~3GB");
+            println!("  Buffer:                   ~7GB");
+        }
+        Tier::Cloud => {
+            println!("  Databases + cache:        ~2GB");
+            println!("  (No local models - using cloud APIs)");
+        }
+    }
+    println!("  {}", "─────────────────────────────────────────".bright_black());
+    println!("  Total required:           {}GB", required_gb);
+
+    if available_gb >= required_gb {
+        println!("  Available:                {}GB {}", available_gb, "✓".green());
+        Ok(())
+    } else {
+        println!("  Available:                {}GB {}", available_gb, "✗".red().bold());
+        println!();
+        fmt_err(
+            "Insufficient disk space",
+            &format!(
+                "Need {}GB for {:?} tier, only {}GB available",
+                required_gb,
+                tier,
+                available_gb
+            ),
+        );
+        anyhow::bail!(
+            "Insufficient disk space: need {}GB, have {}GB",
+            required_gb,
+            available_gb
+        )
+    }
 }
 
 fn prompt_tier() -> Result<Tier> {
@@ -388,10 +972,114 @@ fn prompt_tier() -> Result<Tier> {
     Ok(tier)
 }
 
+/// Attempt to pull an Ollama model via the host `ollama` CLI, retrying up to
+/// `max_retries` times on failure. A 2-second pause is inserted between
+/// attempts so transient network errors have a chance to clear.
+///
+/// Returns `Ok(())` if any attempt succeeds. Returns the last error if all
+/// attempts are exhausted.
+fn pull_model_external_with_retry(model: &str, max_retries: u32) -> Result<()> {
+    let mut last_err = anyhow::anyhow!("no attempts made");
+    for attempt in 1..=max_retries {
+        println!(
+            "  Downloading {} (attempt {}/{})",
+            model.cyan(),
+            attempt,
+            max_retries
+        );
+        let result = Command::new("ollama").args(["pull", model]).status();
+        match result {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                last_err = anyhow::anyhow!("ollama pull exited with {}", status);
+            }
+            Err(e) => {
+                last_err = anyhow::anyhow!("failed to run ollama pull: {}", e);
+            }
+        }
+        if attempt < max_retries {
+            println!(
+                "  {} Download failed: {}. Retrying in 2s...",
+                "!".yellow(),
+                last_err
+            );
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    Err(last_err)
+}
+
+/// Attempt to pull an Ollama model via `docker exec` into the running Ollama
+/// container, retrying up to `max_retries` times on failure.
+///
+/// Returns `Ok(())` if any attempt succeeds. Returns the last error if all
+/// attempts are exhausted.
+fn pull_model_docker_with_retry(model: &str, max_retries: u32) -> Result<()> {
+    let mut last_err = anyhow::anyhow!("no attempts made");
+    for attempt in 1..=max_retries {
+        println!(
+            "  Downloading {} (attempt {}/{})",
+            model.cyan(),
+            attempt,
+            max_retries
+        );
+        let result = Command::new("docker")
+            .args(["exec", "engrammic-ollama", "ollama", "pull", model])
+            .status();
+        match result {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                last_err = anyhow::anyhow!("docker exec ollama pull exited with {}", status);
+            }
+            Err(e) => {
+                last_err = anyhow::anyhow!("failed to run docker exec ollama pull: {}", e);
+            }
+        }
+        if attempt < max_retries {
+            println!(
+                "  {} Download failed: {}. Retrying in 2s...",
+                "!".yellow(),
+                last_err
+            );
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    Err(last_err)
+}
+
+const DOWNLOAD_MAX_RETRIES: u32 = 3;
+
 fn download_models(config: &SelfHostConfig) -> Result<()> {
     let Some(model) = config.tier.ollama_model() else {
         return Ok(());
     };
+
+    // TODO(task-1.4): if config.use_external_ollama is true, skip Docker container
+    // spin-up and instead pull the model directly via the external Ollama HTTP API
+    // (POST http://localhost:11434/api/pull) or by shelling out to `ollama pull`.
+    if config.use_external_ollama {
+        println!();
+        println!(
+            "  {} Using existing Ollama - pulling {} directly...",
+            "→".yellow(),
+            model.cyan()
+        );
+        match pull_model_external_with_retry(model, DOWNLOAD_MAX_RETRIES) {
+            Ok(()) => {
+                println!("  {} Model {} ready", "✓".green(), model);
+            }
+            Err(e) => {
+                println!(
+                    "  {} Could not pull after {} attempts ({}). Run manually: ollama pull {}",
+                    "!".yellow(),
+                    DOWNLOAD_MAX_RETRIES,
+                    e,
+                    model
+                );
+            }
+        }
+        return Ok(());
+    }
 
     println!();
     println!("{}", "Downloading Ollama model".bold());
@@ -439,19 +1127,23 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
         }
     }
 
-    // Pull the model
-    println!("  Pulling {}...", model.cyan());
-    let pull = Command::new("docker")
-        .args(["exec", "engrammic-ollama", "ollama", "pull", model])
-        .status();
-
-    match pull {
-        Ok(status) if status.success() => {
+    // Pull the model with retry
+    match pull_model_docker_with_retry(model, DOWNLOAD_MAX_RETRIES) {
+        Ok(()) => {
             println!("  {} Model {} downloaded", "✓".green(), model);
         }
-        _ => {
-            println!("  {} Model download may still be in progress", "!".yellow());
+        Err(e) => {
+            println!(
+                "  {} Model download failed after {} attempts: {}",
+                "!".yellow(),
+                DOWNLOAD_MAX_RETRIES,
+                e
+            );
             println!("  Check with: docker exec engrammic-ollama ollama list");
+            println!(
+                "  Or retry manually: docker exec engrammic-ollama ollama pull {}",
+                model
+            );
         }
     }
 
@@ -500,7 +1192,7 @@ fn prompt_license() -> Result<Option<String>> {
         // dialoguer Input does not surface Esc directly; we use an empty string
         // submitted via Enter as the skip signal (user is told to leave blank).
         let raw: String = Input::new()
-            .with_prompt("License key (input visible, blank to skip)")
+            .with_prompt("Enter license key (leave blank to configure later - app won't start without one)")
             .allow_empty(true)
             .interact_text()?;
 
@@ -766,6 +1458,82 @@ fn is_port_in_use(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 
+/// Default port assignments for each service.
+#[derive(Debug, Clone)]
+pub struct PortConfig {
+    pub api: u16,
+    pub ollama: u16,
+    pub tei_embed: u16,
+    pub tei_rerank: u16,
+    pub postgres: u16,
+    pub qdrant: u16,
+    pub memgraph: u16,
+    pub redis: u16,
+}
+
+impl Default for PortConfig {
+    fn default() -> Self {
+        Self {
+            api: 8000,
+            ollama: 11434,
+            tei_embed: 8080,
+            tei_rerank: 8081,
+            postgres: 5432,
+            qdrant: 6333,
+            memgraph: 7687,
+            redis: 6379,
+        }
+    }
+}
+
+/// Check ports relevant to the selected tier and print availability status.
+///
+/// Ports that are not used by the tier are skipped. Returns a `PortConfig`
+/// with default values — actual port remapping is left for a follow-up task.
+fn check_and_warn_ports(tier: Tier) -> PortConfig {
+    let config = PortConfig::default();
+
+    println!("  Checking ports...");
+
+    // Ports checked for every tier
+    let mut checks: Vec<(u16, &str)> = vec![
+        (config.api, "API"),
+        (config.postgres, "Postgres"),
+        (config.qdrant, "Qdrant"),
+        (config.memgraph, "Memgraph"),
+        (config.redis, "Redis"),
+    ];
+
+    // Standalone tiers add Ollama and TEI embedder
+    if tier.is_standalone() {
+        checks.push((config.ollama, "Ollama"));
+        checks.push((config.tei_embed, "TEI embeddings"));
+    }
+
+    // Standard and Pro add the TEI reranker
+    if matches!(tier, Tier::Standard | Tier::Pro) {
+        checks.push((config.tei_rerank, "TEI reranker"));
+    }
+
+    // Sort by port number for a predictable display order
+    checks.sort_by_key(|(port, _)| *port);
+
+    for (port, label) in checks {
+        if !is_port_in_use(port) {
+            println!("  {} {} ({}) available", "✓".green(), port, label);
+        } else {
+            println!(
+                "  {} {} ({}) in use - will conflict with Docker container",
+                "✗".red().bold(),
+                port,
+                label
+            );
+        }
+    }
+
+    config
+}
+
 fn prompt_install_dir() -> Result<PathBuf> {
     let default = UserConfig::dir();
     let default_str = default.display().to_string();
@@ -892,6 +1660,9 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
 }
 
 fn generate_compose(config: &SelfHostConfig) -> String {
+    // TODO(task-1.4): when config.use_external_ollama is true, strip the `ollama`
+    // service block from the generated compose so no Ollama container is started.
+
     // Select template based on tier
     let template = match config.tier {
         Tier::Lite => docker::COMPOSE_LITE,
@@ -916,10 +1687,122 @@ fn generate_compose(config: &SelfHostConfig) -> String {
             .replace("standalone-pro.env", ".env");
     }
 
+    // Podman adaptations
+    if config.podman {
+        // Add :Z SELinux label to all named volume mounts.
+        // Named volumes look like `- name:/path` in YAML list form.
+        // We match the pattern `      - <name>:<path>` (6 spaces, list item).
+        compose = add_selinux_z_to_volumes(&compose);
+
+        // Swap Docker GPU syntax for Podman CDI syntax.
+        // The templates have the GPU section commented out; replace the comment
+        // block with an active Podman devices entry.
+        compose = swap_gpu_syntax_for_podman(&compose);
+    }
+
     compose
 }
 
+/// Add `:Z` SELinux label to named volume mounts in a compose string.
+///
+/// Targets lines of the form `      - <volume-name>:<container-path>` where
+/// the left side is a Docker named volume (no leading `/` or `.`). Bind mounts
+/// with absolute or relative host paths are left unchanged.
+fn add_selinux_z_to_volumes(compose: &str) -> String {
+    compose
+        .lines()
+        .map(|line| {
+            // Match a YAML list entry that looks like a named volume mount:
+            // e.g. `      - ollama-models:/root/.ollama`
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("- ") {
+                let rest = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+                // Named volume: no leading `/`, `./`, or `../`
+                if !rest.starts_with('/')
+                    && !rest.starts_with("./")
+                    && !rest.starts_with("../")
+                    && rest.contains(':')
+                    && !rest.ends_with(":Z")
+                    && !rest.ends_with(":z")
+                {
+                    // Only touch lines where the left side looks like a named
+                    // volume (alphanumeric, hyphens, underscores).
+                    let volume_name = rest.split(':').next().unwrap_or("");
+                    if volume_name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    {
+                        let indent: String = line
+                            .chars()
+                            .take_while(|c| c.is_whitespace())
+                            .collect();
+                        return format!("{}- {}:Z", indent, rest.trim_end());
+                    }
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Replace the Docker NVIDIA GPU comment block in a compose string with active
+/// Podman CDI device syntax.
+///
+/// The templates contain a commented-out Docker GPU block of the form:
+/// ```yaml
+/// # For GPU acceleration, uncomment:
+/// #   reservations:
+/// #     devices:
+/// #       - driver: nvidia
+/// #         count: all
+/// #         capabilities: [gpu]
+/// ```
+///
+/// This is replaced with an active Podman CDI entry:
+/// ```yaml
+///     devices:
+///       - nvidia.com/gpu=all
+/// ```
+fn swap_gpu_syntax_for_podman(compose: &str) -> String {
+    // The comment block spans multiple lines. We replace it with the Podman
+    // CDI device stanza using a simple multi-line string replacement.
+    //
+    // Docker GPU block (commented out in templates, 4-space service indent):
+    //
+    //     # For GPU acceleration, uncomment:
+    //     #   reservations:
+    //     #     devices:
+    //     #       - driver: nvidia
+    //     #         count: all
+    //     #         capabilities: [gpu]
+    //
+    // Replaced with active Podman CDI syntax at the same indent level:
+    //
+    //     # GPU (Podman CDI syntax):
+    //     devices:
+    //       - nvidia.com/gpu=all
+    let docker_comment_block = concat!(
+        "    # For GPU acceleration, uncomment:\n",
+        "    #   reservations:\n",
+        "    #     devices:\n",
+        "    #       - driver: nvidia\n",
+        "    #         count: all\n",
+        "    #         capabilities: [gpu]"
+    );
+    let podman_gpu_stanza = concat!(
+        "    # GPU (Podman CDI syntax):\n",
+        "    devices:\n",
+        "      - nvidia.com/gpu=all"
+    );
+    compose.replace(docker_comment_block, podman_gpu_stanza)
+}
+
 fn generate_env(config: &SelfHostConfig) -> String {
+    // TODO(task-1.4): when config.use_external_ollama is true, append
+    // OLLAMA_HOST=http://localhost:11434 to the generated .env so the app
+    // service connects to the user's existing Ollama instance.
+
     // Build the credential lines for the embedding section
     let credential_lines = match &config.embedding_credential {
         Some((var, val)) if var == "VERTEX" => {

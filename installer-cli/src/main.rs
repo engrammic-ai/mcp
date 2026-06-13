@@ -31,6 +31,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let auto = cli.yes;
 
+    // Restore terminal state on Ctrl+C so raw mode is not left active.
+    ctrlc::set_handler(|| {
+        crossterm::terminal::disable_raw_mode().ok();
+        std::process::exit(130);
+    })?;
+
     // Interactive commands need a terminal for prompts (dialoguer reads /dev/tty).
     // Detect up front so users get one clear message instead of a prompt crash.
     let interactive_command = matches!(
@@ -40,7 +46,7 @@ fn main() -> Result<()> {
             | Commands::Uninstall { .. }
             | Commands::Remove { .. }
             | Commands::Skills
-            | Commands::Selfhost
+            | Commands::Selfhost { .. }
             | Commands::Docker
             | Commands::License
     );
@@ -50,7 +56,11 @@ fn main() -> Result<()> {
             "error:".red().bold()
         );
         eprintln!(
-            "  Re-run with {} to auto-configure detected editors:",
+            "  Interactive mode required. If piping, use: {}",
+            "curl -fsSL https://get.engrammic.ai/install.sh | bash -i".cyan()
+        );
+        eprintln!(
+            "  Or re-run with {} to auto-configure detected editors:",
             "-y".cyan()
         );
         eprintln!(
@@ -71,8 +81,8 @@ fn main() -> Result<()> {
         Commands::Uninstall { purge_data } => uninstall(auto, purge_data, cli.tool.as_deref()),
         Commands::Status => status(),
         Commands::Skills => install_skills_only(auto, cli.skill_path.as_deref()),
-        Commands::Selfhost => selfhost::run_wizard(),
-        Commands::Docker => selfhost::run_wizard(),
+        Commands::Selfhost { podman } => selfhost::run_wizard(podman),
+        Commands::Docker => selfhost::run_wizard(false),
         Commands::Upgrade => upgrade_docker(),
         Commands::Scale => scale::show_status(),
         Commands::Doctor => doctor::run_diagnostics(),
@@ -274,7 +284,7 @@ fn handle_returning_user(
         "Start fresh (reconfigure everything)" => {
             let endpoint = match select_deployment_mode(&config)? {
                 DeploymentChoice::Cloud(ep) => ep,
-                DeploymentChoice::SelfHost => return selfhost::run_wizard(),
+                DeploymentChoice::SelfHost => return selfhost::run_wizard(false),
             };
             run_full_install(endpoint, false, tool_id, skill_path)?;
         }
@@ -288,7 +298,10 @@ fn handle_returning_user(
 fn install(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let existing_config = user_config::UserConfig::load().unwrap_or_default();
+    let existing_config = user_config::UserConfig::load().unwrap_or_else(|e| {
+        eprintln!("  {} Config load failed: {}, using defaults", "!".yellow(), e);
+        Default::default()
+    });
     let has_existing_setup = existing_config.endpoint.is_some();
 
     // For returning users (not -y mode), show menu
@@ -304,7 +317,7 @@ fn install(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Resul
     } else {
         match select_deployment_mode(&existing_config)? {
             DeploymentChoice::Cloud(ep) => ep,
-            DeploymentChoice::SelfHost => return selfhost::run_wizard(),
+            DeploymentChoice::SelfHost => return selfhost::run_wizard(false),
         }
     };
 
@@ -417,6 +430,9 @@ fn run_full_install(
     if let Ok(exe) = std::env::current_exe() {
         m.binary_path = Some(exe);
     }
+    // All steps finished: mark installation complete so interrupted installs
+    // can be distinguished from fully-completed ones.
+    m.status = manifest::InstallStatus::Complete;
     m.save()?;
 
     // ---- Summary ----
@@ -1623,7 +1639,10 @@ fn install_tool(tool: &Tool, endpoint: &str, m: &mut manifest::Manifest) -> flow
             println!(
                 "    {}",
                 serde_json::to_string_pretty(&block)
-                    .unwrap_or_default()
+                    .unwrap_or_else(|e| {
+                        eprintln!("  {} Failed to format config block: {}", "!".yellow(), e);
+                        String::new()
+                    })
                     .dimmed()
             );
             flow::Outcome::Manual("requires an in-app step (shown above)".to_string())
@@ -1977,7 +1996,10 @@ fn print_restart_reminder() {
 fn upgrade_docker() -> Result<()> {
     banner::print_banner();
 
-    let config = user_config::UserConfig::load().unwrap_or_default();
+    let config = user_config::UserConfig::load().unwrap_or_else(|e| {
+        eprintln!("  {} Config load failed: {}, using defaults", "!".yellow(), e);
+        Default::default()
+    });
     let dir = user_config::UserConfig::dir();
 
     if config.endpoint.as_deref() != Some(LOCAL_ENDPOINT) {
@@ -2071,7 +2093,10 @@ fn print_harnesses_json() -> Result<()> {
 fn manage_license() -> Result<()> {
     banner::print_banner();
 
-    let config = user_config::UserConfig::load().unwrap_or_default();
+    let config = user_config::UserConfig::load().unwrap_or_else(|e| {
+        eprintln!("  {} Config load failed: {}, using defaults", "!".yellow(), e);
+        Default::default()
+    });
 
     if config.endpoint.as_deref() != Some(LOCAL_ENDPOINT) {
         println!(
