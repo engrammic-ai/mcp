@@ -138,6 +138,9 @@ pub fn run_wizard() -> Result<()> {
     let dagster_port = prompt_dagster_port(port, existing_ports.1)?;
     let postgres_password = prompt_postgres_password()?;
 
+    // Disk space check - after install_dir and tier are known, before any downloads
+    check_disk_space(&install_dir, tier)?;
+
     let config = SelfHostConfig {
         tier,
         license_key,
@@ -344,6 +347,95 @@ fn get_available_memory_gb() -> f64 {
         );
     }
     8.0 // fallback assumption
+}
+
+/// Minimum disk space required for each tier, in gigabytes.
+fn get_required_disk_gb(tier: Tier) -> u64 {
+    match tier {
+        Tier::Lite => 8,
+        Tier::Standard => 20,
+        Tier::Pro => 30,
+        Tier::Cloud => 2,
+    }
+}
+
+/// Print a download breakdown for standalone tiers and verify available disk space.
+///
+/// Returns an error if the path's filesystem has less free space than the tier requires.
+fn check_disk_space(path: &Path, tier: Tier) -> Result<()> {
+    // Ensure the path exists so fs2 can stat it. If not yet created, walk up to
+    // the first ancestor that exists (the install_dir may not exist yet).
+    let stat_path = {
+        let mut p = path;
+        loop {
+            if p.exists() {
+                break p;
+            }
+            match p.parent() {
+                Some(parent) => p = parent,
+                None => break p,
+            }
+        }
+    };
+
+    let available_bytes = fs2::available_space(stat_path)
+        .with_context(|| format!("Could not read available disk space for {}", stat_path.display()))?;
+    let available_gb = available_bytes / 1_073_741_824; // bytes -> GB (floor)
+
+    let required_gb = get_required_disk_gb(tier);
+
+    // Print breakdown
+    println!();
+    match tier {
+        Tier::Lite => {
+            println!("  LLM (phi4-mini):          ~5GB");
+            println!("  Embeddings (TEI):         ~700MB");
+            println!("  Databases + cache:        ~2GB");
+            println!("  Buffer:                   ~300MB");
+        }
+        Tier::Standard => {
+            println!("  LLM (gemma4:12b):         ~8GB");
+            println!("  Embeddings (TEI):         ~700MB");
+            println!("  Reranker (TEI):           ~1GB");
+            println!("  Databases + cache:        ~3GB");
+            println!("  Buffer:                   ~7GB");
+        }
+        Tier::Pro => {
+            println!("  LLM (gemma4:26b):         ~18GB");
+            println!("  Embeddings (TEI):         ~700MB");
+            println!("  Reranker (TEI):           ~1GB");
+            println!("  Databases + cache:        ~3GB");
+            println!("  Buffer:                   ~7GB");
+        }
+        Tier::Cloud => {
+            println!("  Databases + cache:        ~2GB");
+            println!("  (No local models - using cloud APIs)");
+        }
+    }
+    println!("  {}", "─────────────────────────────────────────".bright_black());
+    println!("  Total required:           {}GB", required_gb);
+
+    if available_gb >= required_gb {
+        println!("  Available:                {}GB {}", available_gb, "✓".green());
+        Ok(())
+    } else {
+        println!("  Available:                {}GB {}", available_gb, "✗".red().bold());
+        println!();
+        fmt_err(
+            "Insufficient disk space",
+            &format!(
+                "Need {}GB for {:?} tier, only {}GB available",
+                required_gb,
+                tier,
+                available_gb
+            ),
+        );
+        anyhow::bail!(
+            "Insufficient disk space: need {}GB, have {}GB",
+            required_gb,
+            available_gb
+        )
+    }
 }
 
 fn prompt_tier() -> Result<Tier> {
