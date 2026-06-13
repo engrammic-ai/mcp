@@ -190,6 +190,9 @@ pub fn run_wizard() -> Result<()> {
     let gpu = check_gpu();
     warn_gpu_for_tier(tier, &gpu);
 
+    println!();
+    check_and_warn_ports(tier);
+
     // Step 2: Prerequisites
     println!();
     println!("{}", "Step 2/6: Prerequisites".bold());
@@ -1036,6 +1039,87 @@ fn prompt_dagster_port(mcp_port: u16, existing: Option<u16>) -> Result<u16> {
 
 fn is_port_in_use(port: u16) -> bool {
     std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
+}
+
+/// Returns true if the port can be bound (i.e., nothing is using it).
+fn check_port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Default port assignments for each service.
+#[derive(Debug, Clone)]
+pub struct PortConfig {
+    pub api: u16,
+    pub ollama: u16,
+    pub tei_embed: u16,
+    pub tei_rerank: u16,
+    pub postgres: u16,
+    pub qdrant: u16,
+    pub memgraph: u16,
+    pub redis: u16,
+}
+
+impl Default for PortConfig {
+    fn default() -> Self {
+        Self {
+            api: 8000,
+            ollama: 11434,
+            tei_embed: 8080,
+            tei_rerank: 8081,
+            postgres: 5432,
+            qdrant: 6333,
+            memgraph: 7687,
+            redis: 6379,
+        }
+    }
+}
+
+/// Check ports relevant to the selected tier and print availability status.
+///
+/// Ports that are not used by the tier are skipped. Returns a `PortConfig`
+/// with default values — actual port remapping is left for a follow-up task.
+fn check_and_warn_ports(tier: Tier) -> PortConfig {
+    let config = PortConfig::default();
+
+    println!("  Checking ports...");
+
+    // Ports checked for every tier
+    let mut checks: Vec<(u16, &str)> = vec![
+        (config.api, "API"),
+        (config.postgres, "Postgres"),
+        (config.qdrant, "Qdrant"),
+        (config.memgraph, "Memgraph"),
+        (config.redis, "Redis"),
+    ];
+
+    // Standalone tiers add Ollama and TEI embedder
+    if tier.is_standalone() {
+        checks.push((config.ollama, "Ollama"));
+        checks.push((config.tei_embed, "TEI embeddings"));
+    }
+
+    // Standard and Pro add the TEI reranker
+    if matches!(tier, Tier::Standard | Tier::Pro) {
+        checks.push((config.tei_rerank, "TEI reranker"));
+    }
+
+    // Sort by port number for a predictable display order
+    checks.sort_by_key(|(port, _)| *port);
+
+    for (port, label) in checks {
+        if check_port_available(port) {
+            println!("  {} {} ({}) available", "✓".green(), port, label);
+        } else {
+            println!(
+                "  {} {} ({}) in use - will conflict with Docker container",
+                "✗".red().bold(),
+                port,
+                label
+            );
+        }
+    }
+
+    config
 }
 
 fn prompt_install_dir() -> Result<PathBuf> {
