@@ -50,7 +50,11 @@ fn main() -> Result<()> {
             "error:".red().bold()
         );
         eprintln!(
-            "  Re-run with {} to auto-configure detected editors:",
+            "  Interactive mode required. If piping, use: {}",
+            "curl -fsSL https://get.engrammic.ai/install.sh | bash -i".cyan()
+        );
+        eprintln!(
+            "  Or re-run with {} to auto-configure detected editors:",
             "-y".cyan()
         );
         eprintln!(
@@ -288,7 +292,10 @@ fn handle_returning_user(
 fn install(auto: bool, tool_id: Option<&str>, skill_path: Option<&str>) -> Result<()> {
     banner::print_banner();
 
-    let existing_config = user_config::UserConfig::load().unwrap_or_default();
+    let existing_config = user_config::UserConfig::load().unwrap_or_else(|e| {
+        eprintln!("  {} Config load failed: {}, using defaults", "!".yellow(), e);
+        Default::default()
+    });
     let has_existing_setup = existing_config.endpoint.is_some();
 
     // For returning users (not -y mode), show menu
@@ -1623,7 +1630,10 @@ fn install_tool(tool: &Tool, endpoint: &str, m: &mut manifest::Manifest) -> flow
             println!(
                 "    {}",
                 serde_json::to_string_pretty(&block)
-                    .unwrap_or_default()
+                    .unwrap_or_else(|e| {
+                        eprintln!("  {} Failed to format config block: {}", "!".yellow(), e);
+                        String::new()
+                    })
                     .dimmed()
             );
             flow::Outcome::Manual("requires an in-app step (shown above)".to_string())
@@ -1977,7 +1987,10 @@ fn print_restart_reminder() {
 fn upgrade_docker() -> Result<()> {
     banner::print_banner();
 
-    let config = user_config::UserConfig::load().unwrap_or_default();
+    let config = user_config::UserConfig::load().unwrap_or_else(|e| {
+        eprintln!("  {} Config load failed: {}, using defaults", "!".yellow(), e);
+        Default::default()
+    });
     let dir = user_config::UserConfig::dir();
 
     if config.endpoint.as_deref() != Some(LOCAL_ENDPOINT) {
@@ -2071,7 +2084,10 @@ fn print_harnesses_json() -> Result<()> {
 fn manage_license() -> Result<()> {
     banner::print_banner();
 
-    let config = user_config::UserConfig::load().unwrap_or_default();
+    let config = user_config::UserConfig::load().unwrap_or_else(|e| {
+        eprintln!("  {} Config load failed: {}, using defaults", "!".yellow(), e);
+        Default::default()
+    });
 
     if config.endpoint.as_deref() != Some(LOCAL_ENDPOINT) {
         println!(

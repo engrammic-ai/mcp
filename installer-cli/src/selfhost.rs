@@ -783,7 +783,7 @@ fn prompt_license() -> Result<Option<String>> {
         // dialoguer Input does not surface Esc directly; we use an empty string
         // submitted via Enter as the skip signal (user is told to leave blank).
         let raw: String = Input::new()
-            .with_prompt("License key (input visible, blank to skip)")
+            .with_prompt("Enter license key (leave blank to configure later - app won't start without one)")
             .allow_empty(true)
             .interact_text()?;
 
