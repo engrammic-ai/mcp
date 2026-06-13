@@ -12,6 +12,64 @@ use crate::license;
 use crate::tools::Tool;
 use crate::user_config::UserConfig;
 
+/// Wizard step enum for step-based navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WizardStep {
+    Runtime,
+    Tier,
+    Prerequisites,
+    License,
+    Embeddings,
+    Config,
+    Install,
+}
+
+impl WizardStep {
+    fn number(&self) -> usize {
+        match self {
+            WizardStep::Runtime => 1,
+            WizardStep::Tier => 2,
+            WizardStep::Prerequisites => 3,
+            WizardStep::License => 4,
+            WizardStep::Embeddings => 5,
+            WizardStep::Config => 6,
+            WizardStep::Install => 7,
+        }
+    }
+
+    fn total() -> usize {
+        7
+    }
+
+
+}
+
+/// Intermediate state accumulating wizard choices across steps.
+/// Fields are Option so that going back clears future selections.
+#[derive(Debug, Default)]
+struct WizardState {
+    podman: bool,
+    tier: Option<Tier>,
+    license_key: Option<String>,
+    embedding_model: Option<String>,
+    embedding_dimensions: Option<u32>,
+    embedding_credential: Option<Option<(String, String)>>,
+    install_dir: Option<PathBuf>,
+    port: Option<u16>,
+    dagster_port: Option<u16>,
+    postgres_password: Option<String>,
+    use_external_ollama: Option<bool>,
+}
+
+/// Ask the user whether to go back. Returns true if they want to go back.
+fn prompt_go_back() -> Result<bool> {
+    let input: String = Input::new()
+        .with_prompt("Press Enter to continue, or type 'b' to go back")
+        .allow_empty(true)
+        .interact_text()?;
+    Ok(input.trim().eq_ignore_ascii_case("b"))
+}
+
 /// Print a two-line error in the standard ✗ / → format.
 ///
 ///   ✗ <what_happened>
@@ -192,156 +250,355 @@ pub struct SelfHostConfig {
 pub fn run_wizard(podman: bool) -> Result<()> {
     print_welcome();
 
-    if podman {
-        println!();
-        println!("  {} Podman mode enabled. Make sure to start the socket:", "!".yellow());
-        println!("    podman system service --time=0 unix:///tmp/podman.sock &");
-        println!("    export DOCKER_HOST=unix:///tmp/podman.sock");
-    }
-
-    // Step 1: Hardware Profile (Tier Selection)
-    println!();
-    println!("{}", "Step 1/6: Hardware Profile".bold());
-    println!();
-    let tier = prompt_tier()?;
-    let gpu = check_gpu();
-    warn_gpu_for_tier(tier, &gpu);
-
-    println!();
-    check_and_warn_ports(tier);
-
-    // Step 2: Prerequisites
-    println!();
-    println!("{}", "Step 2/6: Prerequisites".bold());
-    println!();
-    if podman {
-        println!("  {} Podman mode: skipping Docker daemon check.", "→".yellow());
-        check_prerequisites_podman()?;
-    } else {
-        check_prerequisites()?;
-    }
-
-    // Step 3: License
-    println!();
-    println!("{}", "Step 3/6: License".bold());
-    println!();
-    let license_key_opt = prompt_license()?;
-    let license_key = license_key_opt.unwrap_or_default();
-    // If empty: the .env will have ENGRAMMIC_LICENSE_KEY= (blank); the user must run
-    // `engrammic license` before Engrammic will accept connections. The wizard
-    // continues so the rest of the setup is not lost.
-
-    // Step 4: Embeddings (skip for standalone tiers - they use TEI)
-    let (embedding_model, embedding_dimensions, embedding_credential) = if tier.is_standalone() {
-        println!();
-        println!("{}", "Step 4/6: Embeddings".bold());
-        println!();
-        println!(
-            "  {} Using TEI with nomic-embed (768 dims) - bundled with {} tier",
-            "✓".green(),
-            format!("{:?}", tier).to_lowercase()
-        );
-        ("tei/nomic-ai/nomic-embed-text-v1.5".to_string(), 768, None)
-    } else {
-        println!();
-        println!("{}", "Step 4/6: Embeddings".bold());
-        println!();
-        prompt_embeddings()?
-    };
-
-    // Step 5: Configuration
-    println!();
-    println!("{}", "Step 5/6: Configuration".bold());
-    println!();
-    let install_dir = prompt_install_dir()?;
-    let existing_ports = read_existing_ports(&install_dir);
-    let port = prompt_port(existing_ports.0)?;
-    let dagster_port = prompt_dagster_port(port, existing_ports.1)?;
-    let postgres_password = prompt_postgres_password()?;
-
-    // Disk space check - after install_dir and tier are known, before any downloads
-    check_disk_space(&install_dir, tier)?;
-
-    // Detect existing Ollama for standalone tiers before any model downloads
-    let use_external_ollama = if tier.is_standalone() {
-        if let Some(addr) = detect_existing_ollama() {
-            println!();
-            println!(
-                "  {} Detected existing Ollama at {}",
-                "✓".green(),
-                addr.cyan()
-            );
-            Confirm::new()
-                .with_prompt("Use existing Ollama instead of Docker container?")
-                .default(true)
-                .interact()?
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    let config = SelfHostConfig {
-        tier,
-        license_key,
-        port,
-        dagster_port,
-        install_dir,
-        postgres_password,
-        embedding_model,
-        embedding_dimensions,
-        embedding_credential,
-        use_external_ollama,
+    // Initialise state. If --podman was passed on the CLI, pre-set it so the
+    // runtime step shows Podman as already selected and skips the prompt.
+    let mut state = WizardState {
         podman,
+        ..Default::default()
     };
 
-    // Step 6: Install
-    println!();
-    println!("{}", "Step 6/6: Install".bold());
-    println!();
-    write_config_files(&config)?;
+    let mut step = WizardStep::Runtime;
 
-    // Model download for standalone tiers
-    if tier.is_standalone() {
-        download_models(&config)?;
-    }
+    loop {
+        match step {
+            // ----------------------------------------------------------------
+            // Step 1: Container runtime (Docker vs Podman)
+            // ----------------------------------------------------------------
+            WizardStep::Runtime => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Container Runtime",
+                        WizardStep::Runtime.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
 
-    // Offer to start
-    println!();
-    let start_now = Confirm::new()
-        .with_prompt("Start Engrammic now?")
-        .default(true)
-        .interact()?;
+                if podman {
+                    // --podman flag was provided; skip interactive prompt and
+                    // show the socket instructions as before.
+                    println!("  {} Podman mode enabled (--podman flag).", "!".yellow());
+                    println!("    Make sure to start the socket:");
+                    println!("      podman system service --time=0 unix:///tmp/podman.sock &");
+                    println!("      export DOCKER_HOST=unix:///tmp/podman.sock");
+                    state.podman = true;
+                } else {
+                    let options = vec!["Docker (default)", "Podman"];
+                    let idx = Select::new()
+                        .with_prompt("Container runtime")
+                        .items(&options)
+                        .default(0)
+                        .interact()?;
 
-    if start_now {
-        start_and_wait(&config)?;
-        configure_editors(&config)?;
-    } else {
-        print_manual_start_instructions(&config);
-    }
+                    state.podman = idx == 1;
 
-    // Save user config. A skipped license stays None — Some("") would make
-    // doctor and the returning-user menu report an invalid license forever.
-    let user_config = UserConfig {
-        endpoint: Some(format!("http://localhost:{}/mcp", config.port)),
-        license_key: if config.license_key.is_empty() {
-            None
-        } else {
-            Some(config.license_key.clone())
-        },
-        selfhost_dir: Some(config.install_dir.clone()),
-    };
-    user_config.save()?;
+                    if state.podman {
+                        println!();
+                        println!("  {} Podman selected. Make sure to start the socket:", "!".yellow());
+                        println!("    podman system service --time=0 unix:///tmp/podman.sock &");
+                        println!("    export DOCKER_HOST=unix:///tmp/podman.sock");
+                    } else {
+                        println!("  {} Docker selected", "✓".green());
+                    }
+                }
 
-    print_quick_reference(&config);
+                // Runtime is always the first step — no going back from here.
+                step = WizardStep::Tier;
+            }
 
-    if let Ok(exe) = std::env::current_exe() {
-        println!(
-            "  {} CLI available at {}",
-            "✓".green(),
-            exe.display().to_string().cyan()
-        );
+            // ----------------------------------------------------------------
+            // Step 2: Hardware Profile (Tier)
+            // ----------------------------------------------------------------
+            WizardStep::Tier => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Hardware Profile",
+                        WizardStep::Tier.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let tier = prompt_tier()?;
+                let gpu = check_gpu();
+                warn_gpu_for_tier(tier, &gpu);
+
+                println!();
+                check_and_warn_ports(tier);
+
+                state.tier = Some(tier);
+                // Clear downstream state in case user went back and changed tier
+                state.embedding_model = None;
+                state.embedding_dimensions = None;
+                state.embedding_credential = None;
+
+                if prompt_go_back()? {
+                    step = WizardStep::Runtime;
+                } else {
+                    step = WizardStep::Prerequisites;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 3: Prerequisites
+            // ----------------------------------------------------------------
+            WizardStep::Prerequisites => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Prerequisites",
+                        WizardStep::Prerequisites.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                if state.podman {
+                    println!("  {} Podman mode: skipping Docker daemon check.", "→".yellow());
+                    check_prerequisites_podman()?;
+                } else {
+                    check_prerequisites()?;
+                }
+
+                if prompt_go_back()? {
+                    step = WizardStep::Tier;
+                } else {
+                    step = WizardStep::License;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 4: License
+            // ----------------------------------------------------------------
+            WizardStep::License => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: License",
+                        WizardStep::License.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let license_key_opt = prompt_license()?;
+                state.license_key = Some(license_key_opt.unwrap_or_default());
+                // If empty: the .env will have ENGRAMMIC_LICENSE_KEY= (blank); the user must run
+                // `engrammic license` before Engrammic will accept connections. The wizard
+                // continues so the rest of the setup is not lost.
+
+                if prompt_go_back()? {
+                    step = WizardStep::Prerequisites;
+                } else {
+                    step = WizardStep::Embeddings;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 5: Embeddings
+            // ----------------------------------------------------------------
+            WizardStep::Embeddings => {
+                let tier = state.tier.expect("tier must be set before embeddings step");
+
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Embeddings",
+                        WizardStep::Embeddings.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let (embedding_model, embedding_dimensions, embedding_credential) =
+                    if tier.is_standalone() {
+                        println!(
+                            "  {} Using TEI with nomic-embed (768 dims) - bundled with {} tier",
+                            "✓".green(),
+                            format!("{:?}", tier).to_lowercase()
+                        );
+                        (
+                            "tei/nomic-ai/nomic-embed-text-v1.5".to_string(),
+                            768u32,
+                            None,
+                        )
+                    } else {
+                        prompt_embeddings()?
+                    };
+
+                state.embedding_model = Some(embedding_model);
+                state.embedding_dimensions = Some(embedding_dimensions);
+                state.embedding_credential = Some(embedding_credential);
+
+                if prompt_go_back()? {
+                    step = WizardStep::License;
+                } else {
+                    step = WizardStep::Config;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 6: Configuration (ports, install dir, password)
+            // ----------------------------------------------------------------
+            WizardStep::Config => {
+                let tier = state.tier.expect("tier must be set before config step");
+
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Configuration",
+                        WizardStep::Config.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let install_dir = prompt_install_dir()?;
+                let existing_ports = read_existing_ports(&install_dir);
+                let port = prompt_port(existing_ports.0)?;
+                let dagster_port = prompt_dagster_port(port, existing_ports.1)?;
+                let postgres_password = prompt_postgres_password()?;
+
+                // Disk space check - after install_dir and tier are known, before any downloads
+                check_disk_space(&install_dir, tier)?;
+
+                // Detect existing Ollama for standalone tiers before any model downloads
+                let use_external_ollama = if tier.is_standalone() {
+                    if let Some(addr) = detect_existing_ollama() {
+                        println!();
+                        println!(
+                            "  {} Detected existing Ollama at {}",
+                            "✓".green(),
+                            addr.cyan()
+                        );
+                        Confirm::new()
+                            .with_prompt("Use existing Ollama instead of Docker container?")
+                            .default(true)
+                            .interact()?
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                state.install_dir = Some(install_dir);
+                state.port = Some(port);
+                state.dagster_port = Some(dagster_port);
+                state.postgres_password = Some(postgres_password);
+                state.use_external_ollama = Some(use_external_ollama);
+
+                if prompt_go_back()? {
+                    step = WizardStep::Embeddings;
+                } else {
+                    step = WizardStep::Install;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 7: Install
+            // ----------------------------------------------------------------
+            WizardStep::Install => {
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Install",
+                        WizardStep::Install.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                let tier = state.tier.expect("tier must be set");
+                let config = SelfHostConfig {
+                    tier,
+                    license_key: state.license_key.clone().unwrap_or_default(),
+                    port: state.port.expect("port must be set"),
+                    dagster_port: state.dagster_port.expect("dagster_port must be set"),
+                    install_dir: state.install_dir.clone().expect("install_dir must be set"),
+                    postgres_password: state
+                        .postgres_password
+                        .clone()
+                        .expect("postgres_password must be set"),
+                    embedding_model: state
+                        .embedding_model
+                        .clone()
+                        .expect("embedding_model must be set"),
+                    embedding_dimensions: state
+                        .embedding_dimensions
+                        .expect("embedding_dimensions must be set"),
+                    embedding_credential: state
+                        .embedding_credential
+                        .clone()
+                        .expect("embedding_credential must be set"),
+                    use_external_ollama: state.use_external_ollama.unwrap_or(false),
+                    podman: state.podman,
+                };
+
+                write_config_files(&config)?;
+
+                // Model download for standalone tiers
+                if tier.is_standalone() {
+                    download_models(&config)?;
+                }
+
+                // Offer to start
+                println!();
+                let start_now = Confirm::new()
+                    .with_prompt("Start Engrammic now?")
+                    .default(true)
+                    .interact()?;
+
+                if start_now {
+                    start_and_wait(&config)?;
+                    configure_editors(&config)?;
+                } else {
+                    print_manual_start_instructions(&config);
+                }
+
+                // Save user config. A skipped license stays None — Some("") would make
+                // doctor and the returning-user menu report an invalid license forever.
+                let user_config = UserConfig {
+                    endpoint: Some(format!("http://localhost:{}/mcp", config.port)),
+                    license_key: if config.license_key.is_empty() {
+                        None
+                    } else {
+                        Some(config.license_key.clone())
+                    },
+                    selfhost_dir: Some(config.install_dir.clone()),
+                };
+                user_config.save()?;
+
+                print_quick_reference(&config);
+
+                if let Ok(exe) = std::env::current_exe() {
+                    println!(
+                        "  {} CLI available at {}",
+                        "✓".green(),
+                        exe.display().to_string().cyan()
+                    );
+                }
+
+                // Wizard complete — exit the loop
+                break;
+            }
+        }
     }
 
     Ok(())
@@ -365,12 +622,15 @@ fn print_welcome() {
     );
     println!();
     println!("  This wizard will:");
-    println!("    1. Select hardware tier (Lite/Standard/Pro/Cloud)");
-    println!("    2. Check Docker is running");
-    println!("    3. Validate your license");
-    println!("    4. Configure embeddings (auto for standalone tiers)");
-    println!("    5. Configure ports and storage");
-    println!("    6. Download models and start services");
+    println!("    1. Select container runtime (Docker or Podman)");
+    println!("    2. Select hardware tier (Lite/Standard/Pro/Cloud)");
+    println!("    3. Check runtime prerequisites");
+    println!("    4. Validate your license");
+    println!("    5. Configure embeddings (auto for standalone tiers)");
+    println!("    6. Configure ports and storage");
+    println!("    7. Download models and start services");
+    println!();
+    println!("  {} At any step, type 'b' + Enter to go back.", "tip:".dimmed());
     println!();
 }
 
