@@ -306,6 +306,21 @@ fn get_available_memory_gb() -> f64 {
             }
         }
     }
+    #[cfg(target_os = "windows")]
+    {
+        use sysinfo::System;
+        let sys = System::new_all();
+        let bytes = sys.total_memory();
+        if bytes > 0 {
+            return bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        eprintln!(
+            "\x1b[33mwarning: memory detection not supported on this platform; assuming 8 GB\x1b[0m"
+        );
+    }
     8.0 // fallback assumption
 }
 
