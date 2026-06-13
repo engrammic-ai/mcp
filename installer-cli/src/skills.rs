@@ -229,6 +229,14 @@ pub fn remove_gemini_skills(file: &Path) -> Result<usize> {
     Ok(1)
 }
 
+fn validate_dest(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)?;
+    let test_file = path.join(".write_test");
+    std::fs::write(&test_file, "")?;
+    std::fs::remove_file(test_file)?;
+    Ok(())
+}
+
 pub fn unpack_tarball(gz_bytes: &[u8], dest: &Path) -> Result<PathBuf> {
     fs::create_dir_all(dest)?;
     let decoder = GzDecoder::new(gz_bytes);
@@ -267,6 +275,24 @@ pub fn download_skills_tarball() -> Result<Vec<u8>> {
 /// Dispatches based on the destination format.
 /// Returns one (destination path, skill count) pair per destination.
 pub fn install_skills(dests: &[SkillDest]) -> Result<Vec<(PathBuf, usize)>> {
+    // Validate write permissions before downloading anything.
+    for dest in dests {
+        let check_path = match dest.format {
+            SkillFormat::GeminiMd | SkillFormat::AgentsMd => dest
+                .path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(&dest.path),
+            SkillFormat::Directory | SkillFormat::CursorMdc => &dest.path,
+        };
+        validate_dest(check_path).with_context(|| {
+            format!(
+                "Cannot write to {}. Check permissions or choose a different directory.",
+                check_path.display()
+            )
+        })?;
+    }
+
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::with_template("  {spinner} {msg}").expect("valid spinner template"),
@@ -298,6 +324,16 @@ pub fn install_skills(dests: &[SkillDest]) -> Result<Vec<(PathBuf, usize)>> {
 /// This is a compatibility shim for callsites that only have a PathBuf (e.g. the
 /// `--skill-path` CLI flag which has no format information).
 pub fn install_skills_to_paths(dests: &[PathBuf]) -> Result<Vec<(PathBuf, usize)>> {
+    // Validate write permissions before downloading anything.
+    for dest in dests {
+        validate_dest(dest).with_context(|| {
+            format!(
+                "Cannot write to {}. Check permissions or choose a different directory.",
+                dest.display()
+            )
+        })?;
+    }
+
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::with_template("  {spinner} {msg}").expect("valid spinner template"),

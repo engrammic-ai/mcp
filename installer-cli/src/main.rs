@@ -424,6 +424,9 @@ fn run_full_install(
     if let Ok(exe) = std::env::current_exe() {
         m.binary_path = Some(exe);
     }
+    // All steps finished: mark installation complete so interrupted installs
+    // can be distinguished from fully-completed ones.
+    m.status = manifest::InstallStatus::Complete;
     m.save()?;
 
     // ---- Summary ----

@@ -645,6 +645,83 @@ fn prompt_tier() -> Result<Tier> {
     Ok(tier)
 }
 
+/// Attempt to pull an Ollama model via the host `ollama` CLI, retrying up to
+/// `max_retries` times on failure. A 2-second pause is inserted between
+/// attempts so transient network errors have a chance to clear.
+///
+/// Returns `Ok(())` if any attempt succeeds. Returns the last error if all
+/// attempts are exhausted.
+fn pull_model_external_with_retry(model: &str, max_retries: u32) -> Result<()> {
+    let mut last_err = anyhow::anyhow!("no attempts made");
+    for attempt in 1..=max_retries {
+        println!(
+            "  Downloading {} (attempt {}/{})",
+            model.cyan(),
+            attempt,
+            max_retries
+        );
+        let result = Command::new("ollama").args(["pull", model]).status();
+        match result {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                last_err = anyhow::anyhow!("ollama pull exited with {}", status);
+            }
+            Err(e) => {
+                last_err = anyhow::anyhow!("failed to run ollama pull: {}", e);
+            }
+        }
+        if attempt < max_retries {
+            println!(
+                "  {} Download failed: {}. Retrying in 2s...",
+                "!".yellow(),
+                last_err
+            );
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    Err(last_err)
+}
+
+/// Attempt to pull an Ollama model via `docker exec` into the running Ollama
+/// container, retrying up to `max_retries` times on failure.
+///
+/// Returns `Ok(())` if any attempt succeeds. Returns the last error if all
+/// attempts are exhausted.
+fn pull_model_docker_with_retry(model: &str, max_retries: u32) -> Result<()> {
+    let mut last_err = anyhow::anyhow!("no attempts made");
+    for attempt in 1..=max_retries {
+        println!(
+            "  Downloading {} (attempt {}/{})",
+            model.cyan(),
+            attempt,
+            max_retries
+        );
+        let result = Command::new("docker")
+            .args(["exec", "engrammic-ollama", "ollama", "pull", model])
+            .status();
+        match result {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                last_err = anyhow::anyhow!("docker exec ollama pull exited with {}", status);
+            }
+            Err(e) => {
+                last_err = anyhow::anyhow!("failed to run docker exec ollama pull: {}", e);
+            }
+        }
+        if attempt < max_retries {
+            println!(
+                "  {} Download failed: {}. Retrying in 2s...",
+                "!".yellow(),
+                last_err
+            );
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    Err(last_err)
+}
+
+const DOWNLOAD_MAX_RETRIES: u32 = 3;
+
 fn download_models(config: &SelfHostConfig) -> Result<()> {
     let Some(model) = config.tier.ollama_model() else {
         return Ok(());
@@ -660,15 +737,16 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
             "→".yellow(),
             model.cyan()
         );
-        let pull = Command::new("ollama").args(["pull", model]).status();
-        match pull {
-            Ok(status) if status.success() => {
+        match pull_model_external_with_retry(model, DOWNLOAD_MAX_RETRIES) {
+            Ok(()) => {
                 println!("  {} Model {} ready", "✓".green(), model);
             }
-            _ => {
+            Err(e) => {
                 println!(
-                    "  {} Could not pull via CLI - run: ollama pull {}",
+                    "  {} Could not pull after {} attempts ({}). Run manually: ollama pull {}",
                     "!".yellow(),
+                    DOWNLOAD_MAX_RETRIES,
+                    e,
                     model
                 );
             }
@@ -722,19 +800,23 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
         }
     }
 
-    // Pull the model
-    println!("  Pulling {}...", model.cyan());
-    let pull = Command::new("docker")
-        .args(["exec", "engrammic-ollama", "ollama", "pull", model])
-        .status();
-
-    match pull {
-        Ok(status) if status.success() => {
+    // Pull the model with retry
+    match pull_model_docker_with_retry(model, DOWNLOAD_MAX_RETRIES) {
+        Ok(()) => {
             println!("  {} Model {} downloaded", "✓".green(), model);
         }
-        _ => {
-            println!("  {} Model download may still be in progress", "!".yellow());
+        Err(e) => {
+            println!(
+                "  {} Model download failed after {} attempts: {}",
+                "!".yellow(),
+                DOWNLOAD_MAX_RETRIES,
+                e
+            );
             println!("  Check with: docker exec engrammic-ollama ollama list");
+            println!(
+                "  Or retry manually: docker exec engrammic-ollama ollama pull {}",
+                model
+            );
         }
     }
 
