@@ -1,6 +1,6 @@
 [package]
 name = "engrammic"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 description = "Engrammic MCP installer CLI"
 license = "Apache-2.0"
@@ -27,7 +27,7 @@ ed25519-dalek = "2"
 sysinfo = "0.31"
 fs2 = "0.4"
 ctrlc = "3"
-crossterm = { version = "0.28", default-features = false }
+crossterm = "0.28"
 
 [dev-dependencies]
 tempfile = "3"
