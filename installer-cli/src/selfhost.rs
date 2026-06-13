@@ -26,6 +26,82 @@ fn fmt_err(what_happened: &str, what_to_do: &str) {
 const DEFAULT_PORT: u16 = 8000;
 const DEFAULT_DAGSTER_PORT: u16 = 3000;
 
+/// Basic GPU information returned by nvidia-smi.
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+    pub vram_mb: u64,
+}
+
+impl GpuInfo {
+    pub fn vram_gb(&self) -> f64 {
+        self.vram_mb as f64 / 1024.0
+    }
+}
+
+/// Probe the system for an NVIDIA GPU via nvidia-smi.
+///
+/// Returns `None` if nvidia-smi is not found, fails, or produces unparseable
+/// output. Returns `Some(GpuInfo)` on success. Failures are silent — callers
+/// treat absence of a GPU as a warning condition, not an error.
+pub fn check_gpu() -> Option<GpuInfo> {
+    let output = Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // nvidia-smi may report multiple GPUs, one per line. Use the first.
+    let first_line = stdout.lines().next()?.trim();
+    let vram_mb: u64 = first_line.parse().ok()?;
+
+    Some(GpuInfo { vram_mb })
+}
+
+/// Print GPU status or warnings after tier selection.
+///
+/// Warnings are informational only — they do not abort the installation.
+fn warn_gpu_for_tier(tier: Tier, gpu: &Option<GpuInfo>) {
+    println!();
+    match (tier, gpu) {
+        (Tier::Standard, None) => {
+            println!(
+                "  {} No GPU detected. Standard tier works best with GPU (8GB+ VRAM).",
+                "!".yellow()
+            );
+            println!("    CPU-only inference will be slower but functional.");
+        }
+        (Tier::Pro, None) => {
+            println!(
+                "  {} No GPU detected. Pro tier recommends GPU (16GB+ VRAM) for gemma4:26b.",
+                "!".yellow()
+            );
+            println!("    CPU-only inference will be slower but functional.");
+        }
+        (Tier::Pro, Some(info)) if info.vram_mb < 16 * 1024 => {
+            println!(
+                "  {} Pro tier recommends 16GB+ VRAM, detected {:.0}GB.",
+                "!".yellow(),
+                info.vram_gb()
+            );
+        }
+        (_, Some(info)) => {
+            println!(
+                "  {} GPU detected: {:.0}GB VRAM",
+                "✓".green(),
+                info.vram_gb()
+            );
+        }
+        // Lite and Cloud: no GPU advice needed.
+        _ => {}
+    }
+}
+
 /// Hardware tier for standalone deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -93,6 +169,8 @@ pub fn run_wizard() -> Result<()> {
     println!("{}", "Step 1/6: Hardware Profile".bold());
     println!();
     let tier = prompt_tier()?;
+    let gpu = check_gpu();
+    warn_gpu_for_tier(tier, &gpu);
 
     // Step 2: Prerequisites
     println!();
