@@ -61,6 +61,63 @@ struct WizardState {
     use_external_ollama: Option<bool>,
 }
 
+/// Existing configuration read from .env file.
+#[derive(Debug, Default)]
+struct ExistingConfig {
+    license_key: Option<String>,
+    embedding_model: Option<String>,
+    embedding_dimensions: Option<u32>,
+    postgres_password: Option<String>,
+    openai_api_key: Option<String>,
+    ollama_host: Option<String>,
+}
+
+/// Read existing configuration from .env file in install directory.
+fn read_existing_env(install_dir: &Path) -> ExistingConfig {
+    let env_path = install_dir.join(".env");
+    let Ok(content) = std::fs::read_to_string(&env_path) else {
+        return ExistingConfig::default();
+    };
+
+    let mut config = ExistingConfig::default();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim();
+            let value = value.trim();
+
+            match key {
+                "ENGRAMMIC_LICENSE_KEY" if !value.is_empty() => {
+                    config.license_key = Some(value.to_string());
+                }
+                "EMBEDDING_MODEL" if !value.is_empty() => {
+                    config.embedding_model = Some(value.to_string());
+                }
+                "EMBEDDING_DIMENSIONS" => {
+                    config.embedding_dimensions = value.parse().ok();
+                }
+                "POSTGRES_PASSWORD" if !value.is_empty() => {
+                    config.postgres_password = Some(value.to_string());
+                }
+                "OPENAI_API_KEY" if !value.is_empty() => {
+                    config.openai_api_key = Some(value.to_string());
+                }
+                "OLLAMA_HOST" if !value.is_empty() => {
+                    config.ollama_host = Some(value.to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    config
+}
+
 /// Ask the user whether to go back. Returns true if they want to go back.
 fn prompt_go_back() -> Result<bool> {
     let input: String = Input::new()
@@ -250,6 +307,12 @@ pub struct SelfHostConfig {
 pub fn run_wizard(podman: bool) -> Result<()> {
     print_welcome();
 
+    // Check for existing installation
+    let default_dir = UserConfig::dir();
+    let existing_env = read_existing_env(&default_dir);
+    let existing_ports = read_existing_ports(&default_dir);
+    let has_existing = default_dir.join(".env").exists();
+
     // Initialise state. If --podman was passed on the CLI, pre-set it so the
     // runtime step shows Podman as already selected and skips the prompt.
     let mut state = WizardState {
@@ -257,7 +320,51 @@ pub fn run_wizard(podman: bool) -> Result<()> {
         ..Default::default()
     };
 
+    // Pre-populate from existing config if available
     let mut step = WizardStep::Runtime;
+    if has_existing {
+        println!(
+            "  {} Existing installation found at {}",
+            "!".yellow(),
+            default_dir.display()
+        );
+
+        let options = vec![
+            "Reconfigure (update settings, keep data)",
+            "Fresh install (overwrite everything)",
+            "Cancel",
+        ];
+        let idx = Select::new()
+            .with_prompt("What would you like to do?")
+            .items(&options)
+            .default(0)
+            .interact()?;
+
+        match idx {
+            0 => {
+                // Reconfigure: pre-populate state with existing values
+                println!("  {} Reconfigure mode - existing values shown as defaults", "→".yellow());
+                state.install_dir = Some(default_dir.clone());
+                state.license_key = existing_env.license_key;
+                state.embedding_model = existing_env.embedding_model;
+                state.embedding_dimensions = existing_env.embedding_dimensions;
+                state.postgres_password = existing_env.postgres_password;
+                state.port = existing_ports.0;
+                state.dagster_port = existing_ports.1;
+                // Detect external ollama from existing config
+                state.use_external_ollama = existing_env.ollama_host.map(|_| true);
+            }
+            1 => {
+                // Fresh install: continue with empty state
+                println!("  {} Fresh install mode", "→".yellow());
+            }
+            _ => {
+                println!("  Cancelled.");
+                return Ok(());
+            }
+        }
+        println!();
+    }
 
     loop {
         match step {
@@ -391,7 +498,7 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 );
                 println!();
 
-                let license_key_opt = prompt_license()?;
+                let license_key_opt = prompt_license(state.license_key.as_deref())?;
                 state.license_key = Some(license_key_opt.unwrap_or_default());
                 // If empty: the .env will have ENGRAMMIC_LICENSE_KEY= (blank); the user must run
                 // `engrammic license` before Engrammic will accept connections. The wizard
@@ -467,11 +574,16 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 );
                 println!();
 
-                let install_dir = prompt_install_dir()?;
-                let existing_ports = read_existing_ports(&install_dir);
+                let install_dir = prompt_install_dir(state.install_dir.as_ref())?;
+                // Use pre-populated ports from state if reconfiguring, else read from disk
+                let existing_ports = if state.port.is_some() {
+                    (state.port, state.dagster_port)
+                } else {
+                    read_existing_ports(&install_dir)
+                };
                 let port = prompt_port(existing_ports.0)?;
                 let dagster_port = prompt_dagster_port(port, existing_ports.1)?;
-                let postgres_password = prompt_postgres_password()?;
+                let postgres_password = prompt_postgres_password(state.postgres_password.as_deref())?;
 
                 // Disk space check - after install_dir and tier are known, before any downloads
                 check_disk_space(&install_dir, tier)?;
@@ -1024,7 +1136,7 @@ fn pull_model_docker_with_retry(model: &str, max_retries: u32) -> Result<()> {
             max_retries
         );
         let result = Command::new("docker")
-            .args(["exec", "engrammic-ollama", "ollama", "pull", model])
+            .args(["exec", "-t", "engrammic-ollama", "ollama", "pull", model])
             .status();
         match result {
             Ok(status) if status.success() => return Ok(()),
@@ -1154,8 +1266,11 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
 /// how to complete it later (`engrammic license`).
 ///
 /// Not unit-testable (requires a TTY).
-fn prompt_license() -> Result<Option<String>> {
-    let existing = UserConfig::load().ok().and_then(|c| c.license_key);
+fn prompt_license(prepopulated: Option<&str>) -> Result<Option<String>> {
+    // Check prepopulated value first (from .env), then fall back to UserConfig
+    let existing = prepopulated
+        .map(|s| s.to_string())
+        .or_else(|| UserConfig::load().ok().and_then(|c| c.license_key));
 
     if let Some(ref key) = existing {
         if let Ok(info) = license::validate_license_format(key) {
@@ -1531,7 +1646,17 @@ fn check_and_warn_ports(tier: Tier) -> PortConfig {
     config
 }
 
-fn prompt_install_dir() -> Result<PathBuf> {
+fn prompt_install_dir(existing: Option<&PathBuf>) -> Result<PathBuf> {
+    // If reconfiguring, use existing dir as default and skip overwrite check
+    if let Some(existing_dir) = existing {
+        println!(
+            "  {} Using existing directory: {}",
+            "✓".green(),
+            existing_dir.display()
+        );
+        return Ok(existing_dir.clone());
+    }
+
     let default = UserConfig::dir();
     let default_str = default.display().to_string();
 
@@ -1565,14 +1690,15 @@ fn prompt_install_dir() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn prompt_postgres_password() -> Result<String> {
+fn prompt_postgres_password(existing: Option<&str>) -> Result<String> {
     println!(
         "  {}",
         "(For local dev the default is fine; use a strong password in production)".dimmed()
     );
+    let default = existing.unwrap_or("engrammic").to_string();
     let password: String = Input::new()
         .with_prompt("PostgreSQL password")
-        .default("engrammic".into())
+        .default(default)
         .interact_text()?;
 
     if password == "engrammic" || password.len() < 8 {
