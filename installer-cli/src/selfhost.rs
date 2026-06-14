@@ -2129,9 +2129,52 @@ fn start_and_wait(config: &SelfHostConfig) -> Result<()> {
     }
     println!("  {} Images pulled", "✓".green());
 
+    // Check for existing containers
+    let ps_output = Command::new("docker")
+        .args([
+            "compose",
+            "-f",
+            compose_path.to_str().unwrap(),
+            "ps",
+            "--format",
+            "{{.Name}}: {{.Status}}",
+        ])
+        .current_dir(&config.install_dir)
+        .output();
+
+    let existing_containers: Vec<String> = ps_output
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let force_recreate = if !existing_containers.is_empty() {
+        println!();
+        println!("  {} Existing containers:", "!".yellow());
+        for container in &existing_containers {
+            println!("    - {}", container);
+        }
+        println!();
+        Confirm::new()
+            .with_prompt("  Stop and recreate them?")
+            .default(true)
+            .interact()?
+    } else {
+        false
+    };
+
     // Start services
+    let mut args = vec!["compose", "-f", compose_path.to_str().unwrap(), "up", "-d"];
+    if force_recreate {
+        args.push("--force-recreate");
+    }
+
     let status = Command::new("docker")
-        .args(["compose", "-f", compose_path.to_str().unwrap(), "up", "-d"])
+        .args(&args)
         .current_dir(&config.install_dir)
         .status()
         .context("Failed to run docker compose up")?;
