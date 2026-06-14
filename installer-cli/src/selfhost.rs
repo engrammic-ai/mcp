@@ -1054,9 +1054,6 @@ fn download_models(config: &SelfHostConfig) -> Result<()> {
         return Ok(());
     };
 
-    // TODO(task-1.4): if config.use_external_ollama is true, skip Docker container
-    // spin-up and instead pull the model directly via the external Ollama HTTP API
-    // (POST http://localhost:11434/api/pull) or by shelling out to `ollama pull`.
     if config.use_external_ollama {
         println!();
         println!(
@@ -1660,9 +1657,6 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
 }
 
 fn generate_compose(config: &SelfHostConfig) -> String {
-    // TODO(task-1.4): when config.use_external_ollama is true, strip the `ollama`
-    // service block from the generated compose so no Ollama container is started.
-
     // Select template based on tier
     let template = match config.tier {
         Tier::Lite => docker::COMPOSE_LITE,
@@ -1685,6 +1679,11 @@ fn generate_compose(config: &SelfHostConfig) -> String {
             .replace("standalone-lite.env", ".env")
             .replace("standalone-standard.env", ".env")
             .replace("standalone-pro.env", ".env");
+    }
+
+    // Strip ollama service when using external Ollama
+    if config.use_external_ollama {
+        compose = strip_ollama_service(&compose);
     }
 
     // Podman adaptations
@@ -1798,11 +1797,59 @@ fn swap_gpu_syntax_for_podman(compose: &str) -> String {
     compose.replace(docker_comment_block, podman_gpu_stanza)
 }
 
-fn generate_env(config: &SelfHostConfig) -> String {
-    // TODO(task-1.4): when config.use_external_ollama is true, append
-    // OLLAMA_HOST=http://localhost:11434 to the generated .env so the app
-    // service connects to the user's existing Ollama instance.
+/// Strip the `ollama` service from a compose file when using external Ollama.
+///
+/// Removes the entire service block starting with `  ollama:` up to (but not
+/// including) the next top-level service or section. Also removes the
+/// `ollama-models` volume declaration.
+fn strip_ollama_service(compose: &str) -> String {
+    let mut result = String::new();
+    let mut skip_until_next_service = false;
+    let mut in_volumes_section = false;
 
+    for line in compose.lines() {
+        // Detect start of ollama service block
+        if line.starts_with("  ollama:") {
+            skip_until_next_service = true;
+            continue;
+        }
+
+        // Detect end of service block (next service at same indent level)
+        if skip_until_next_service {
+            // A line starting with exactly 2 spaces followed by a word and colon
+            // indicates a new service or section (e.g., "  app:", "  redis:", "volumes:")
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            if indent == 2 && trimmed.ends_with(':') && !trimmed.starts_with('#') {
+                skip_until_next_service = false;
+            } else if indent == 0 && trimmed.ends_with(':') {
+                // Top-level section like "volumes:"
+                skip_until_next_service = false;
+            } else {
+                continue;
+            }
+        }
+
+        // Track volumes section to strip ollama-models
+        if line == "volumes:" {
+            in_volumes_section = true;
+        } else if !line.starts_with(' ') && !line.is_empty() && line != "volumes:" {
+            in_volumes_section = false;
+        }
+
+        // Skip ollama-models volume declaration
+        if in_volumes_section && line.trim_start().starts_with("ollama-models:") {
+            continue;
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
+}
+
+fn generate_env(config: &SelfHostConfig) -> String {
     // Build the credential lines for the embedding section
     let credential_lines = match &config.embedding_credential {
         Some((var, val)) if var == "VERTEX" => {
@@ -1820,6 +1867,13 @@ fn generate_env(config: &SelfHostConfig) -> String {
         String::new()
     } else {
         format!("{credential_lines}\n")
+    };
+
+    // Point to external Ollama when not using bundled container
+    let ollama_section = if config.use_external_ollama {
+        "# External Ollama (user's existing instance)\nOLLAMA_HOST=http://localhost:11434\n"
+    } else {
+        ""
     };
 
     format!(
@@ -1848,6 +1902,7 @@ EMBEDDING_DIMENSIONS={embedding_dimensions}
 # MEMGRAPH_HOST=memgraph
 # MEMGRAPH_PORT=7687
 ENGRAMMIC_CONFIG_DIR=/app/config-override
+{ollama_section}
 
 # RERANKING (optional, improves recall quality)
 # Uncomment to enable. Cohere is the recommended provider.
@@ -1871,6 +1926,7 @@ TELEMETRY__ENABLED=false
         embedding_model = config.embedding_model,
         embedding_dimensions = config.embedding_dimensions,
         credential_section = credential_section,
+        ollama_section = ollama_section,
     )
 }
 
