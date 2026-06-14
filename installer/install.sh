@@ -53,7 +53,7 @@ detect_target() {
     arch=""
 
     case "$(uname -s)" in
-        Linux)  os="unknown-linux-gnu" ;;
+        Linux)  os="unknown-linux-musl" ;;
         Darwin) os="apple-darwin" ;;
         *)
             printf '\033[1;31merror:\033[0m Unsupported OS: %s\n  → Please open an issue: https://github.com/%s/issues\n' \
