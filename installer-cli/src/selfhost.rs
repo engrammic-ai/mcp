@@ -1950,16 +1950,27 @@ fn swap_gpu_syntax_for_podman(compose: &str) -> String {
 /// Strip the `ollama` service from a compose file when using external Ollama.
 ///
 /// Removes the entire service block starting with `  ollama:` up to (but not
-/// including) the next top-level service or section. Also removes the
-/// `ollama-models` volume declaration.
+/// including) the next top-level service or section. Also removes:
+/// - `ollama-models` volume declaration
+/// - `ollama:` + `condition: service_healthy` from depends_on blocks
+/// - Updates `OLLAMA_BASE_URL=http://ollama:...` to `http://localhost:...`
 fn strip_ollama_service(compose: &str) -> String {
     let mut result = String::new();
     let mut skip_until_next_service = false;
     let mut in_volumes_section = false;
+    let mut skip_next_condition_line = false;
 
     for line in compose.lines() {
-        // Detect start of ollama service block
-        if line.starts_with("  ollama:") {
+        // Skip the "condition: service_healthy" line after "ollama:" in depends_on
+        if skip_next_condition_line {
+            skip_next_condition_line = false;
+            if line.trim().starts_with("condition:") {
+                continue;
+            }
+        }
+
+        // Detect start of ollama service block (top-level service definition)
+        if line.starts_with("  ollama:") && !line.contains("condition:") {
             skip_until_next_service = true;
             continue;
         }
@@ -1992,7 +2003,21 @@ fn strip_ollama_service(compose: &str) -> String {
             continue;
         }
 
-        result.push_str(line);
+        // Skip "ollama:" dependency entries (inside depends_on blocks)
+        // These look like "      ollama:" at 6-space indent
+        if line.trim() == "ollama:" {
+            skip_next_condition_line = true;
+            continue;
+        }
+
+        // Rewrite OLLAMA_BASE_URL from docker network to localhost
+        let output_line = if line.contains("OLLAMA_BASE_URL=http://ollama:") {
+            line.replace("http://ollama:", "http://localhost:")
+        } else {
+            line.to_string()
+        };
+
+        result.push_str(&output_line);
         result.push('\n');
     }
 
