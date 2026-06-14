@@ -359,7 +359,31 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 println!("  {} Fresh install mode", "→".yellow());
             }
             _ => {
-                println!("  Cancelled.");
+                // Cancelled reconfigure, but offer to just launch existing
+                println!();
+                let just_launch = Confirm::new()
+                    .with_prompt("Just start existing installation?")
+                    .default(true)
+                    .interact()?;
+
+                if just_launch {
+                    let port = existing_ports.0.unwrap_or(DEFAULT_PORT);
+                    let config = SelfHostConfig {
+                        tier: Tier::Cloud, // doesn't matter for launch
+                        license_key: existing_env.license_key.unwrap_or_default(),
+                        port,
+                        dagster_port: existing_ports.1.unwrap_or(DEFAULT_DAGSTER_PORT),
+                        install_dir: default_dir.clone(),
+                        postgres_password: String::new(),
+                        embedding_model: String::new(),
+                        embedding_dimensions: 0,
+                        embedding_credential: None,
+                        use_external_ollama: false,
+                        podman,
+                    };
+                    start_and_wait(&config)?;
+                    print_quick_reference(&config);
+                }
                 return Ok(());
             }
         }
