@@ -1,4 +1,4 @@
-# Engrammic Self-Hosted - includes SAGE pipelines (~5GB RAM total)
+# Engrammic Self-Hosted - includes SAGE pipelines (~9GB RAM total)
 # Installed by: engrammic docker
 # For scaling guidance, run: engrammic scale
 # To upgrade, run: engrammic upgrade
@@ -26,7 +26,6 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_USER=engrammic
       - POSTGRES_DATABASE=engrammic
-      - LICENSE_VALIDATION_ENABLED=true
       - GOOGLE_APPLICATION_CREDENTIALS=/mnt/gcloud/application_default_credentials.json
       # LiteLLM Vertex AI env vars (mapped from .env)
       - VERTEXAI_PROJECT=${VERTEX_PROJECT:-}
@@ -46,12 +45,12 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
-      start_period: 15s
+      start_period: 60s
       retries: 3
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 2G
     restart: unless-stopped
 
   reaction-worker:
@@ -84,7 +83,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
     restart: unless-stopped
 
   dagster:
@@ -119,12 +118,12 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/server_info')"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
+      start_period: 60s
       retries: 3
     deploy:
       resources:
         limits:
-          memory: 768M
+          memory: 1G
     restart: unless-stopped
 
   dagster-daemon:
@@ -153,7 +152,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
     restart: unless-stopped
 
   memgraph:
@@ -172,7 +171,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 2G
     restart: unless-stopped
 
   qdrant:
@@ -190,7 +189,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
     restart: unless-stopped
 
   redis:
@@ -207,7 +206,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 256M
     restart: unless-stopped
 
   postgres:
@@ -227,7 +226,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
     restart: unless-stopped
 
 volumes:

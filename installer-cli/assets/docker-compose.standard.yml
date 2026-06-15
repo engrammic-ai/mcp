@@ -1,6 +1,6 @@
 # docker/docker-compose.standalone-standard.yml
 # Engrammic Standalone Standard - 24GB RAM minimum, 32GB recommended
-# Includes: Ollama (gemma4:12b), TEI embeddings, TEI reranker
+# Includes: Ollama (gemma3:12b), TEI embeddings, TEI reranker
 
 services:
   app:
@@ -18,13 +18,12 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_USER=engrammic
       - POSTGRES_DATABASE=engrammic
-      - LICENSE_VALIDATION_ENABLED=true
       - EMBEDDING_PROVIDER=tei
       - TEI_URL=http://tei:8080
       - EMBEDDING_DIMENSIONS=768
       - LLM_PROVIDER=ollama
       - OLLAMA_BASE_URL=http://ollama:11434
-      - DEFAULT_LLM_MODEL=gemma4:12b
+      - DEFAULT_LLM_MODEL=gemma3:12b
       - MODEL_TIER=standalone_standard
       - TEI_RERANKER_URL=http://tei-reranker:8080
     depends_on:
@@ -46,12 +45,45 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
-      start_period: 30s
+      start_period: 60s
       retries: 3
     deploy:
       resources:
         limits:
           memory: 1G
+    restart: unless-stopped
+
+  reaction-worker:
+    image: europe-north1-docker.pkg.dev/engrammic/releases/engrammic-api:latest
+    container_name: engrammic-reaction-worker
+    command: ["taskiq", "worker", "context_service.reactions.worker_entrypoint:broker", "--workers", "1"]
+    env_file:
+      - standalone-standard.env
+    environment:
+      - ENVIRONMENT=standalone
+      - MEMGRAPH_HOST=memgraph
+      - QDRANT_HOST=qdrant
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=engrammic
+      - POSTGRES_DATABASE=engrammic
+      - EMBEDDING_PROVIDER=tei
+      - TEI_URL=http://tei:8080
+      - EMBEDDING_DIMENSIONS=768
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DEFAULT_LLM_MODEL=gemma3:12b
+      - MODEL_TIER=standalone_standard
+      - TEI_RERANKER_URL=http://tei-reranker:8080
+    depends_on:
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     restart: unless-stopped
 
   dagster:
@@ -74,7 +106,7 @@ services:
       - EMBEDDING_DIMENSIONS=768
       - LLM_PROVIDER=ollama
       - OLLAMA_BASE_URL=http://ollama:11434
-      - DEFAULT_LLM_MODEL=gemma4:12b
+      - DEFAULT_LLM_MODEL=gemma3:12b
       - MODEL_TIER=standalone_standard
       - TEI_RERANKER_URL=http://tei-reranker:8080
     depends_on:
@@ -96,12 +128,46 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/server_info')"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
+      start_period: 60s
       retries: 3
     deploy:
       resources:
         limits:
           memory: 1G
+    restart: unless-stopped
+
+  dagster-daemon:
+    image: europe-north1-docker.pkg.dev/engrammic/releases/engrammic-dagster:latest
+    container_name: engrammic-dagster-daemon
+    command: ["dagster-daemon", "run"]
+    env_file:
+      - standalone-standard.env
+    environment:
+      - ENVIRONMENT=standalone
+      - DAGSTER_HOME=/app
+      - MEMGRAPH_HOST=memgraph
+      - QDRANT_HOST=qdrant
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=engrammic
+      - POSTGRES_DATABASE=engrammic
+      - EMBEDDING_PROVIDER=tei
+      - TEI_URL=http://tei:8080
+      - EMBEDDING_DIMENSIONS=768
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DEFAULT_LLM_MODEL=gemma3:12b
+      - MODEL_TIER=standalone_standard
+      - TEI_RERANKER_URL=http://tei-reranker:8080
+    depends_on:
+      dagster:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     restart: unless-stopped
 
   ollama:
@@ -112,8 +178,8 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     environment:
-      - OLLAMA_MODEL=gemma4:12b
-    entrypoint: ["/bin/sh", "-c", "ollama serve & until bash -c 'echo > /dev/tcp/localhost/11434' 2>/dev/null; do sleep 1; done && ollama pull gemma4:12b && wait"]
+      - OLLAMA_MODEL=gemma3:12b
+    entrypoint: ["/bin/sh", "-c", "ollama serve & until bash -c 'echo > /dev/tcp/localhost/11434' 2>/dev/null; do sleep 1; done && ollama pull gemma3:12b && wait"]
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/11434' 2>/dev/null"]
       interval: 30s
@@ -139,17 +205,17 @@ services:
       - "8081:8080"
     volumes:
       - tei-embed-models:/data
-    command: ["--model-id", "nomic-ai/nomic-embed-text-v2-moe"]
+    command: ["--model-id", "nomic-ai/nomic-embed-text-v2-moe", "--port", "8080"]
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/80' 2>/dev/null"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 120s
+      retries: 10
+      start_period: 300s
     deploy:
       resources:
         limits:
-          memory: 4G
+          memory: 8G
     restart: unless-stopped
 
   tei-reranker:
@@ -159,17 +225,17 @@ services:
       - "8082:8080"
     volumes:
       - tei-reranker-models:/data
-    command: ["--model-id", "BAAI/bge-reranker-v2-m3"]
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--port", "8080"]
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/80' 2>/dev/null"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 180s
+      retries: 10
+      start_period: 300s
     deploy:
       resources:
         limits:
-          memory: 6G
+          memory: 10G
     restart: unless-stopped
 
   memgraph:
