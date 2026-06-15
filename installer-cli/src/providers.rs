@@ -7,6 +7,14 @@ pub struct OtherProvider {
     pub env_vars: Vec<(String, String)>,
 }
 
+/// Specification for a credential that needs to be collected.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CredentialSpec {
+    pub env_var: &'static str,
+    pub prompt: &'static str,
+    pub secret: bool,
+}
+
 /// LLM provider selection for Cloud tier.
 #[derive(Debug, Clone)]
 pub enum LlmProvider {
@@ -19,6 +27,34 @@ pub enum LlmProvider {
 }
 
 impl LlmProvider {
+    pub fn required_credentials(&self) -> Vec<CredentialSpec> {
+        match self {
+            LlmProvider::OpenAI => vec![CredentialSpec {
+                env_var: "OPENAI_API_KEY",
+                prompt: "OpenAI API key",
+                secret: true,
+            }],
+            LlmProvider::Anthropic => vec![CredentialSpec {
+                env_var: "ANTHROPIC_API_KEY",
+                prompt: "Anthropic API key",
+                secret: true,
+            }],
+            LlmProvider::VertexAI => vec![
+                CredentialSpec { env_var: "VERTEX_PROJECT", prompt: "GCP project ID", secret: false },
+                CredentialSpec { env_var: "VERTEX_LOCATION", prompt: "GCP location (e.g., us-central1)", secret: false },
+            ],
+            LlmProvider::AzureOpenAI => vec![
+                CredentialSpec { env_var: "AZURE_API_KEY", prompt: "Azure OpenAI API key", secret: true },
+                CredentialSpec { env_var: "AZURE_API_BASE", prompt: "Azure endpoint URL", secret: false },
+                CredentialSpec { env_var: "AZURE_API_VERSION", prompt: "Azure API version (e.g., 2024-02-01)", secret: false },
+            ],
+            LlmProvider::Bedrock => vec![
+                CredentialSpec { env_var: "AWS_REGION", prompt: "AWS region (e.g., us-east-1)", secret: false },
+            ],
+            LlmProvider::Other(_) => vec![],
+        }
+    }
+
     /// litellm provider name for YAML output.
     pub fn provider_name(&self) -> &str {
         match self {
@@ -96,6 +132,29 @@ impl EmbeddingProvider {
             EmbeddingProvider::Other(o) => o.dimensions.unwrap_or(768),
         }
     }
+
+    pub fn required_credentials(&self) -> Vec<CredentialSpec> {
+        match self {
+            EmbeddingProvider::OpenAI => vec![CredentialSpec {
+                env_var: "OPENAI_API_KEY",
+                prompt: "OpenAI API key",
+                secret: true,
+            }],
+            EmbeddingProvider::VertexAI => vec![
+                CredentialSpec { env_var: "VERTEX_PROJECT", prompt: "GCP project ID", secret: false },
+                CredentialSpec { env_var: "VERTEX_LOCATION", prompt: "GCP location", secret: false },
+            ],
+            EmbeddingProvider::AzureOpenAI => vec![
+                CredentialSpec { env_var: "AZURE_API_KEY", prompt: "Azure OpenAI API key", secret: true },
+                CredentialSpec { env_var: "AZURE_API_BASE", prompt: "Azure endpoint URL", secret: false },
+                CredentialSpec { env_var: "AZURE_API_VERSION", prompt: "Azure API version", secret: false },
+            ],
+            EmbeddingProvider::Bedrock => vec![
+                CredentialSpec { env_var: "AWS_REGION", prompt: "AWS region", secret: false },
+            ],
+            EmbeddingProvider::Other(_) => vec![],
+        }
+    }
 }
 
 /// Reranker provider selection for Cloud tier.
@@ -128,6 +187,60 @@ impl RerankerProvider {
 
     pub fn is_none(&self) -> bool {
         matches!(self, RerankerProvider::None)
+    }
+
+    pub fn required_credentials(&self) -> Vec<CredentialSpec> {
+        match self {
+            RerankerProvider::None => vec![],
+            RerankerProvider::Cohere => vec![CredentialSpec {
+                env_var: "COHERE_API_KEY",
+                prompt: "Cohere API key",
+                secret: true,
+            }],
+            RerankerProvider::VertexAI => vec![
+                CredentialSpec { env_var: "VERTEX_PROJECT", prompt: "GCP project ID", secret: false },
+                CredentialSpec { env_var: "VERTEX_LOCATION", prompt: "GCP location", secret: false },
+            ],
+            RerankerProvider::Other(_) => vec![],
+        }
+    }
+}
+
+/// Collection of all three provider selections for credential deduplication.
+#[derive(Debug, Clone)]
+pub struct ProviderSet {
+    pub llm: LlmProvider,
+    pub embedding: EmbeddingProvider,
+    pub reranker: RerankerProvider,
+}
+
+impl ProviderSet {
+    /// Get deduplicated list of all required credentials.
+    pub fn required_credentials(&self) -> Vec<CredentialSpec> {
+        let mut creds = Vec::new();
+        creds.extend(self.llm.required_credentials());
+        creds.extend(self.embedding.required_credentials());
+        creds.extend(self.reranker.required_credentials());
+
+        // Deduplicate by env_var
+        creds.sort_by(|a, b| a.env_var.cmp(b.env_var));
+        creds.dedup_by(|a, b| a.env_var == b.env_var);
+        creds
+    }
+
+    /// Get custom env vars from Other providers.
+    pub fn custom_env_vars(&self) -> Vec<(String, String)> {
+        let mut vars = Vec::new();
+        if let LlmProvider::Other(o) = &self.llm {
+            vars.extend(o.env_vars.clone());
+        }
+        if let EmbeddingProvider::Other(o) = &self.embedding {
+            vars.extend(o.env_vars.clone());
+        }
+        if let RerankerProvider::Other(o) = &self.reranker {
+            vars.extend(o.env_vars.clone());
+        }
+        vars
     }
 }
 
@@ -178,5 +291,32 @@ mod tests {
     fn reranker_cohere_has_model() {
         assert_eq!(RerankerProvider::Cohere.model(), Some("rerank-v3.5"));
         assert!(!RerankerProvider::Cohere.is_none());
+    }
+
+    #[test]
+    fn provider_set_deduplicates_credentials() {
+        let set = ProviderSet {
+            llm: LlmProvider::VertexAI,
+            embedding: EmbeddingProvider::VertexAI,
+            reranker: RerankerProvider::VertexAI,
+        };
+        let creds = set.required_credentials();
+        // Should have VERTEX_PROJECT and VERTEX_LOCATION only once each
+        let vertex_project_count = creds.iter().filter(|c| c.env_var == "VERTEX_PROJECT").count();
+        assert_eq!(vertex_project_count, 1);
+    }
+
+    #[test]
+    fn provider_set_collects_mixed_credentials() {
+        let set = ProviderSet {
+            llm: LlmProvider::Anthropic,
+            embedding: EmbeddingProvider::OpenAI,
+            reranker: RerankerProvider::Cohere,
+        };
+        let creds = set.required_credentials();
+        let env_vars: Vec<_> = creds.iter().map(|c| c.env_var).collect();
+        assert!(env_vars.contains(&"ANTHROPIC_API_KEY"));
+        assert!(env_vars.contains(&"OPENAI_API_KEY"));
+        assert!(env_vars.contains(&"COHERE_API_KEY"));
     }
 }
