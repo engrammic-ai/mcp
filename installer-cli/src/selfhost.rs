@@ -7,8 +7,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use std::collections::HashMap;
+
 use crate::docker;
 use crate::license;
+use crate::providers::{EmbeddingProvider, LlmProvider, ProviderSet, RerankerProvider};
+use crate::ram::{check_ram_for_tier, RamCheckResult};
 use crate::tools::Tool;
 use crate::user_config::UserConfig;
 
@@ -17,9 +21,13 @@ use crate::user_config::UserConfig;
 enum WizardStep {
     Runtime,
     Tier,
-    Prerequisites,
+    RamCheck,           // Standalone only
+    LlmProvider,        // Cloud only
+    EmbeddingProvider,  // Cloud only
+    RerankerProvider,   // Cloud only
+    Credentials,        // Cloud only
     License,
-    Embeddings,
+    Embeddings,         // Standalone only (legacy)
     Config,
     Install,
 }
@@ -29,19 +37,57 @@ impl WizardStep {
         match self {
             WizardStep::Runtime => 1,
             WizardStep::Tier => 2,
-            WizardStep::Prerequisites => 3,
-            WizardStep::License => 4,
-            WizardStep::Embeddings => 5,
-            WizardStep::Config => 6,
-            WizardStep::Install => 7,
+            WizardStep::RamCheck => 3,
+            WizardStep::LlmProvider => 3,
+            WizardStep::EmbeddingProvider => 4,
+            WizardStep::RerankerProvider => 5,
+            WizardStep::Credentials => 6,
+            WizardStep::License => 7,
+            WizardStep::Embeddings => 8,
+            WizardStep::Config => 9,
+            WizardStep::Install => 10,
         }
     }
 
     fn total() -> usize {
-        7
+        10
     }
+}
 
+fn next_step(current: WizardStep, tier: Tier) -> WizardStep {
+    match (current, tier) {
+        (WizardStep::Runtime, _) => WizardStep::Tier,
+        (WizardStep::Tier, Tier::Cloud) => WizardStep::LlmProvider,
+        (WizardStep::Tier, _) => WizardStep::RamCheck,
+        (WizardStep::RamCheck, _) => WizardStep::License,
+        (WizardStep::LlmProvider, _) => WizardStep::EmbeddingProvider,
+        (WizardStep::EmbeddingProvider, _) => WizardStep::RerankerProvider,
+        (WizardStep::RerankerProvider, _) => WizardStep::Credentials,
+        (WizardStep::Credentials, _) => WizardStep::License,
+        (WizardStep::License, Tier::Cloud) => WizardStep::Config,
+        (WizardStep::License, _) => WizardStep::Embeddings,
+        (WizardStep::Embeddings, _) => WizardStep::Config,
+        (WizardStep::Config, _) => WizardStep::Install,
+        (WizardStep::Install, _) => WizardStep::Install,
+    }
+}
 
+fn prev_step(current: WizardStep, tier: Tier) -> WizardStep {
+    match (current, tier) {
+        (WizardStep::Runtime, _) => WizardStep::Runtime,
+        (WizardStep::Tier, _) => WizardStep::Runtime,
+        (WizardStep::RamCheck, _) => WizardStep::Tier,
+        (WizardStep::LlmProvider, _) => WizardStep::Tier,
+        (WizardStep::EmbeddingProvider, _) => WizardStep::LlmProvider,
+        (WizardStep::RerankerProvider, _) => WizardStep::EmbeddingProvider,
+        (WizardStep::Credentials, _) => WizardStep::RerankerProvider,
+        (WizardStep::License, Tier::Cloud) => WizardStep::Credentials,
+        (WizardStep::License, _) => WizardStep::RamCheck,
+        (WizardStep::Embeddings, _) => WizardStep::License,
+        (WizardStep::Config, Tier::Cloud) => WizardStep::License,
+        (WizardStep::Config, _) => WizardStep::Embeddings,
+        (WizardStep::Install, _) => WizardStep::Config,
+    }
 }
 
 /// Intermediate state accumulating wizard choices across steps.
@@ -51,14 +97,32 @@ struct WizardState {
     podman: bool,
     tier: Option<Tier>,
     license_key: Option<String>,
+    // Standalone tier embeddings (legacy)
     embedding_model: Option<String>,
     embedding_dimensions: Option<u32>,
     embedding_credential: Option<Option<(String, String)>>,
+    // Cloud tier providers
+    llm_provider: Option<LlmProvider>,
+    embedding_provider: Option<EmbeddingProvider>,
+    reranker_provider: Option<RerankerProvider>,
+    collected_credentials: HashMap<String, String>,
+    // Common config
     install_dir: Option<PathBuf>,
     port: Option<u16>,
     dagster_port: Option<u16>,
     postgres_password: Option<String>,
     use_external_ollama: Option<bool>,
+}
+
+impl WizardState {
+    /// Build ProviderSet from state. Returns None if any provider is missing.
+    fn provider_set(&self) -> Option<ProviderSet> {
+        Some(ProviderSet {
+            llm: self.llm_provider.clone()?,
+            embedding: self.embedding_provider.clone()?,
+            reranker: self.reranker_provider.clone()?,
+        })
+    }
 }
 
 /// Existing configuration read from .env file.
@@ -293,9 +357,13 @@ pub struct SelfHostConfig {
     pub dagster_port: u16,
     pub install_dir: PathBuf,
     pub postgres_password: String,
+    // Standalone tier embeddings
     pub embedding_model: String,
     pub embedding_dimensions: u32,
     pub embedding_credential: Option<(String, String)>,
+    // Cloud tier providers
+    pub providers: Option<ProviderSet>,
+    pub collected_credentials: HashMap<String, String>,
     /// If true, skip the Ollama Docker container and point OLLAMA_HOST at the
     /// user's existing local Ollama instance (localhost:11434).
     pub use_external_ollama: bool,
@@ -378,6 +446,8 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                         embedding_model: String::new(),
                         embedding_dimensions: 0,
                         embedding_credential: None,
+                        providers: None,
+                        collected_credentials: HashMap::new(),
                         use_external_ollama: false,
                         podman,
                     };
@@ -468,30 +538,71 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 state.embedding_model = None;
                 state.embedding_dimensions = None;
                 state.embedding_credential = None;
+                state.llm_provider = None;
+                state.embedding_provider = None;
+                state.reranker_provider = None;
+                state.collected_credentials.clear();
 
                 if prompt_go_back()? {
                     step = WizardStep::Runtime;
                 } else {
-                    step = WizardStep::Prerequisites;
+                    step = next_step(WizardStep::Tier, tier);
                 }
             }
 
             // ----------------------------------------------------------------
-            // Step 3: Prerequisites
+            // Step 3a: RAM Check (Standalone only)
             // ----------------------------------------------------------------
-            WizardStep::Prerequisites => {
+            WizardStep::RamCheck => {
+                let tier = state.tier.expect("tier must be set");
                 println!();
                 println!(
                     "{}",
                     format!(
-                        "Step {}/{}: Prerequisites",
-                        WizardStep::Prerequisites.number(),
+                        "Step {}/{}: System Check",
+                        WizardStep::RamCheck.number(),
                         WizardStep::total()
                     )
                     .bold()
                 );
                 println!();
 
+                // Check prerequisites first
+                if state.podman {
+                    println!("  {} Podman mode: skipping Docker daemon check.", "→".yellow());
+                    check_prerequisites_podman()?;
+                } else {
+                    check_prerequisites()?;
+                }
+
+                // RAM check
+                if prompt_ram_check(tier)? {
+                    step = next_step(WizardStep::RamCheck, tier);
+                } else {
+                    // User chose to go back or switch tier
+                    state.tier = None;
+                    step = WizardStep::Tier;
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Step 3b: LLM Provider (Cloud only)
+            // ----------------------------------------------------------------
+            WizardStep::LlmProvider => {
+                let tier = state.tier.expect("tier must be set");
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: LLM Provider",
+                        WizardStep::LlmProvider.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                // Check prerequisites first time we enter Cloud flow
                 if state.podman {
                     println!("  {} Podman mode: skipping Docker daemon check.", "→".yellow());
                     check_prerequisites_podman()?;
@@ -500,16 +611,102 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 }
 
                 if prompt_go_back()? {
-                    step = WizardStep::Tier;
-                } else {
-                    step = WizardStep::License;
+                    state.llm_provider = None;
+                    step = prev_step(WizardStep::LlmProvider, tier);
+                    continue;
                 }
+
+                state.llm_provider = Some(prompt_llm_provider()?);
+                step = next_step(WizardStep::LlmProvider, tier);
             }
 
             // ----------------------------------------------------------------
-            // Step 4: License
+            // Step 4: Embedding Provider (Cloud only)
+            // ----------------------------------------------------------------
+            WizardStep::EmbeddingProvider => {
+                let tier = state.tier.expect("tier must be set");
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Embedding Provider",
+                        WizardStep::EmbeddingProvider.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                if prompt_go_back()? {
+                    state.embedding_provider = None;
+                    step = prev_step(WizardStep::EmbeddingProvider, tier);
+                    continue;
+                }
+
+                state.embedding_provider = Some(prompt_embedding_provider()?);
+                step = next_step(WizardStep::EmbeddingProvider, tier);
+            }
+
+            // ----------------------------------------------------------------
+            // Step 5: Reranker Provider (Cloud only)
+            // ----------------------------------------------------------------
+            WizardStep::RerankerProvider => {
+                let tier = state.tier.expect("tier must be set");
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: Reranker",
+                        WizardStep::RerankerProvider.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                if prompt_go_back()? {
+                    state.reranker_provider = None;
+                    step = prev_step(WizardStep::RerankerProvider, tier);
+                    continue;
+                }
+
+                state.reranker_provider = Some(prompt_reranker_provider()?);
+                step = next_step(WizardStep::RerankerProvider, tier);
+            }
+
+            // ----------------------------------------------------------------
+            // Step 6: Credentials (Cloud only)
+            // ----------------------------------------------------------------
+            WizardStep::Credentials => {
+                let tier = state.tier.expect("tier must be set");
+                println!();
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}/{}: API Credentials",
+                        WizardStep::Credentials.number(),
+                        WizardStep::total()
+                    )
+                    .bold()
+                );
+                println!();
+
+                if prompt_go_back()? {
+                    state.collected_credentials.clear();
+                    step = prev_step(WizardStep::Credentials, tier);
+                    continue;
+                }
+
+                let providers = state.provider_set().expect("providers must be set");
+                state.collected_credentials = prompt_credentials(&providers)?;
+                step = next_step(WizardStep::Credentials, tier);
+            }
+
+            // ----------------------------------------------------------------
+            // Step 7: License
             // ----------------------------------------------------------------
             WizardStep::License => {
+                let tier = state.tier.expect("tier must be set");
                 println!();
                 println!(
                     "{}",
@@ -529,14 +726,14 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 // continues so the rest of the setup is not lost.
 
                 if prompt_go_back()? {
-                    step = WizardStep::Prerequisites;
+                    step = prev_step(WizardStep::License, tier);
                 } else {
-                    step = WizardStep::Embeddings;
+                    step = next_step(WizardStep::License, tier);
                 }
             }
 
             // ----------------------------------------------------------------
-            // Step 5: Embeddings
+            // Step 8: Embeddings (Standalone only)
             // ----------------------------------------------------------------
             WizardStep::Embeddings => {
                 let tier = state.tier.expect("tier must be set before embeddings step");
@@ -553,30 +750,20 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 );
                 println!();
 
-                let (embedding_model, embedding_dimensions, embedding_credential) =
-                    if tier.is_standalone() {
-                        println!(
-                            "  {} Using TEI with nomic-embed (768 dims) - bundled with {} tier",
-                            "✓".green(),
-                            format!("{:?}", tier).to_lowercase()
-                        );
-                        (
-                            "tei/nomic-ai/nomic-embed-text-v1.5".to_string(),
-                            768u32,
-                            None,
-                        )
-                    } else {
-                        prompt_embeddings()?
-                    };
-
-                state.embedding_model = Some(embedding_model);
-                state.embedding_dimensions = Some(embedding_dimensions);
-                state.embedding_credential = Some(embedding_credential);
+                // Standalone tiers use bundled TEI
+                println!(
+                    "  {} Using TEI with nomic-embed (768 dims) - bundled with {} tier",
+                    "✓".green(),
+                    format!("{:?}", tier).to_lowercase()
+                );
+                state.embedding_model = Some("tei/nomic-ai/nomic-embed-text-v1.5".to_string());
+                state.embedding_dimensions = Some(768u32);
+                state.embedding_credential = Some(None);
 
                 if prompt_go_back()? {
-                    step = WizardStep::License;
+                    step = prev_step(WizardStep::Embeddings, tier);
                 } else {
-                    step = WizardStep::Config;
+                    step = next_step(WizardStep::Embeddings, tier);
                 }
             }
 
@@ -639,9 +826,9 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 state.use_external_ollama = Some(use_external_ollama);
 
                 if prompt_go_back()? {
-                    step = WizardStep::Embeddings;
+                    step = prev_step(WizardStep::Config, tier);
                 } else {
-                    step = WizardStep::Install;
+                    step = next_step(WizardStep::Config, tier);
                 }
             }
 
@@ -662,6 +849,27 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 println!();
 
                 let tier = state.tier.expect("tier must be set");
+
+                // For Cloud tier, get providers; for Standalone, use embedded values
+                let (embedding_model, embedding_dimensions, embedding_credential, providers) =
+                    if tier == Tier::Cloud {
+                        let ps = state.provider_set().expect("providers must be set for Cloud tier");
+                        // Use provider defaults for compatibility fields
+                        (
+                            format!("{}/{}", ps.embedding.provider_name(), ps.embedding.model()),
+                            ps.embedding.dimensions(),
+                            None,
+                            Some(ps),
+                        )
+                    } else {
+                        (
+                            state.embedding_model.clone().expect("embedding_model must be set"),
+                            state.embedding_dimensions.expect("embedding_dimensions must be set"),
+                            state.embedding_credential.clone().expect("embedding_credential must be set"),
+                            None,
+                        )
+                    };
+
                 let config = SelfHostConfig {
                     tier,
                     license_key: state.license_key.clone().unwrap_or_default(),
@@ -672,17 +880,11 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                         .postgres_password
                         .clone()
                         .expect("postgres_password must be set"),
-                    embedding_model: state
-                        .embedding_model
-                        .clone()
-                        .expect("embedding_model must be set"),
-                    embedding_dimensions: state
-                        .embedding_dimensions
-                        .expect("embedding_dimensions must be set"),
-                    embedding_credential: state
-                        .embedding_credential
-                        .clone()
-                        .expect("embedding_credential must be set"),
+                    embedding_model,
+                    embedding_dimensions,
+                    embedding_credential,
+                    providers,
+                    collected_credentials: state.collected_credentials.clone(),
                     use_external_ollama: state.use_external_ollama.unwrap_or(false),
                     podman: state.podman,
                 };
@@ -1547,6 +1749,326 @@ fn read_existing_ports(install_dir: &Path) -> (Option<u16>, Option<u16>) {
     (app_port, dagster_port)
 }
 
+// ============================================================================
+// Cloud tier provider prompts
+// ============================================================================
+
+fn prompt_llm_provider() -> Result<LlmProvider> {
+    use crate::providers::OtherProvider;
+    use dialoguer::Password;
+
+    let options = vec![
+        "OpenAI (gpt-4o / gpt-4o-mini)",
+        "Anthropic (claude-sonnet / claude-haiku)",
+        "Vertex AI (gemini-2.5-pro / gemini-2.5-flash)",
+        "Azure OpenAI (gpt-4o / gpt-4o-mini)",
+        "AWS Bedrock (claude-sonnet / claude-haiku)",
+        "Other (custom litellm provider)",
+    ];
+
+    let idx = Select::new()
+        .with_prompt("Select LLM provider")
+        .items(&options)
+        .default(0)
+        .interact()?;
+
+    match idx {
+        0 => Ok(LlmProvider::OpenAI),
+        1 => Ok(LlmProvider::Anthropic),
+        2 => Ok(LlmProvider::VertexAI),
+        3 => Ok(LlmProvider::AzureOpenAI),
+        4 => Ok(LlmProvider::Bedrock),
+        5 => {
+            let provider: String = Input::new()
+                .with_prompt("litellm provider name (e.g., groq, together_ai)")
+                .interact_text()?;
+            let model: String = Input::new()
+                .with_prompt("Model ID")
+                .interact_text()?;
+
+            println!("  Enter environment variables (empty name to finish):");
+            let mut env_vars = Vec::new();
+            loop {
+                let name: String = Input::new()
+                    .with_prompt("  Env var name")
+                    .allow_empty(true)
+                    .interact_text()?;
+                if name.is_empty() {
+                    break;
+                }
+                let value: String = Password::new()
+                    .with_prompt(format!("  {}", name))
+                    .interact()?;
+                env_vars.push((name, value));
+            }
+
+            Ok(LlmProvider::Other(OtherProvider {
+                provider,
+                model,
+                dimensions: None,
+                env_vars,
+            }))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn prompt_embedding_provider() -> Result<EmbeddingProvider> {
+    use crate::providers::OtherProvider;
+    use dialoguer::Password;
+
+    let options = vec![
+        "OpenAI (text-embedding-3-large, 3072 dims)",
+        "Vertex AI (text-embedding-005, 768 dims)",
+        "Azure OpenAI (text-embedding-3-large, 3072 dims)",
+        "AWS Bedrock (titan-embed-text-v2, 1024 dims)",
+        "Other (custom provider)",
+    ];
+
+    let idx = Select::new()
+        .with_prompt("Select embedding provider")
+        .items(&options)
+        .default(0)
+        .interact()?;
+
+    match idx {
+        0 => Ok(EmbeddingProvider::OpenAI),
+        1 => Ok(EmbeddingProvider::VertexAI),
+        2 => Ok(EmbeddingProvider::AzureOpenAI),
+        3 => Ok(EmbeddingProvider::Bedrock),
+        4 => {
+            let provider: String = Input::new()
+                .with_prompt("litellm provider name")
+                .interact_text()?;
+            let model: String = Input::new()
+                .with_prompt("Model ID")
+                .interact_text()?;
+
+            println!();
+            println!("  {} Embedding dimensions are critical for Qdrant compatibility.", "!".yellow());
+            println!("  {} Wrong dimensions will corrupt your vector store.", "!".yellow());
+            let dimensions: u32 = Input::new()
+                .with_prompt("Embedding dimensions")
+                .interact_text()?;
+
+            println!("  Enter environment variables (empty name to finish):");
+            let mut env_vars = Vec::new();
+            loop {
+                let name: String = Input::new()
+                    .with_prompt("  Env var name")
+                    .allow_empty(true)
+                    .interact_text()?;
+                if name.is_empty() {
+                    break;
+                }
+                let value: String = Password::new()
+                    .with_prompt(format!("  {}", name))
+                    .interact()?;
+                env_vars.push((name, value));
+            }
+
+            Ok(EmbeddingProvider::Other(OtherProvider {
+                provider,
+                model,
+                dimensions: Some(dimensions),
+                env_vars,
+            }))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn prompt_reranker_provider() -> Result<RerankerProvider> {
+    use crate::providers::OtherProvider;
+    use dialoguer::Password;
+
+    let options = vec![
+        "None (disable reranking - faster but lower quality)",
+        "Cohere (rerank-v3.5)",
+        "Vertex AI (semantic-ranker)",
+        "Other (custom provider)",
+    ];
+
+    let idx = Select::new()
+        .with_prompt("Select reranker")
+        .items(&options)
+        .default(0)
+        .interact()?;
+
+    match idx {
+        0 => Ok(RerankerProvider::None),
+        1 => Ok(RerankerProvider::Cohere),
+        2 => Ok(RerankerProvider::VertexAI),
+        3 => {
+            let provider: String = Input::new()
+                .with_prompt("litellm provider name")
+                .interact_text()?;
+            let model: String = Input::new()
+                .with_prompt("Model ID")
+                .interact_text()?;
+
+            println!("  Enter environment variables (empty name to finish):");
+            let mut env_vars = Vec::new();
+            loop {
+                let name: String = Input::new()
+                    .with_prompt("  Env var name")
+                    .allow_empty(true)
+                    .interact_text()?;
+                if name.is_empty() {
+                    break;
+                }
+                let value: String = Password::new()
+                    .with_prompt(format!("  {}", name))
+                    .interact()?;
+                env_vars.push((name, value));
+            }
+
+            Ok(RerankerProvider::Other(OtherProvider {
+                provider,
+                model,
+                dimensions: None,
+                env_vars,
+            }))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn prompt_credentials(providers: &ProviderSet) -> Result<HashMap<String, String>> {
+    use dialoguer::Password;
+
+    let specs = providers.required_credentials();
+    let custom_vars = providers.custom_env_vars();
+
+    if specs.is_empty() && custom_vars.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    println!();
+    let env_var_names: Vec<_> = specs.iter().map(|s| s.env_var).collect();
+    println!("  Your setup needs: {}", env_var_names.join(", "));
+    println!();
+
+    let mut creds = HashMap::new();
+
+    for spec in specs {
+        let value = if spec.secret {
+            Password::new()
+                .with_prompt(format!("  {}", spec.prompt))
+                .interact()?
+        } else {
+            Input::new()
+                .with_prompt(format!("  {}", spec.prompt))
+                .interact_text()?
+        };
+        creds.insert(spec.env_var.to_string(), value);
+    }
+
+    // Custom env vars from Other providers are already collected
+    for (name, value) in custom_vars {
+        creds.insert(name, value);
+    }
+
+    Ok(creds)
+}
+
+fn prompt_ram_check(tier: Tier) -> Result<bool> {
+    let tier_name = match tier {
+        Tier::Lite => "Lite",
+        Tier::Standard => "Standard",
+        Tier::Pro => "Pro",
+        Tier::Cloud => return Ok(true), // Skip for Cloud
+    };
+
+    match check_ram_for_tier(tier_name) {
+        RamCheckResult::Ok | RamCheckResult::Unknown => Ok(true),
+        RamCheckResult::Warning { detected, minimum } => {
+            println!();
+            println!("  {} Detected: {}GB RAM", "!".yellow(), detected);
+            println!();
+            println!(
+                "  {} {} tier requires {}GB+ RAM.",
+                "Warning:".yellow(),
+                tier_name,
+                minimum
+            );
+            println!("  Your system may experience slowdowns or OOM errors.");
+            println!();
+
+            let lite_option = format!("Switch to Lite ({}GB minimum)", crate::ram::tier_min_ram("Lite"));
+            let options = vec![
+                "Continue anyway",
+                &lite_option,
+                "Go back to tier selection",
+            ];
+
+            let idx = Select::new()
+                .with_prompt("What would you like to do?")
+                .items(&options)
+                .default(0)
+                .interact()?;
+
+            match idx {
+                0 => Ok(true),  // Continue
+                1 => Ok(false), // Will trigger tier change to Lite
+                2 => Ok(false), // Will go back
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Cloud tier models.yaml generation
+// ============================================================================
+
+fn generate_cloud_models_yaml(providers: &ProviderSet) -> String {
+    let llm_provider = providers.llm.provider_name();
+    let reasoning_model = providers.llm.reasoning_model();
+    let fast_model = providers.llm.fast_model();
+
+    let embed_provider = providers.embedding.provider_name();
+    let embed_model = providers.embedding.model();
+    let embed_dims = providers.embedding.dimensions();
+
+    let reranker_section = if providers.reranker.is_none() {
+        String::new()
+    } else {
+        format!(
+            r#"    reranker:
+      provider: {}
+      model: {}
+"#,
+            providers.reranker.provider_name().unwrap(),
+            providers.reranker.model().unwrap()
+        )
+    };
+
+    format!(
+        r#"# Cloud tier model configuration
+# Generated by engrammic installer
+
+tier: self_hosted
+
+tiers:
+  self_hosted:
+    embeddings:
+      provider: {embed_provider}
+      model: {embed_model}
+      dimensions: {embed_dims}
+    reasoning:
+      provider: {llm_provider}
+      model: {reasoning_model}
+    fast:
+      provider: {llm_provider}
+      model: {fast_model}
+{reranker_section}    query_expander:
+      provider: {llm_provider}
+      model: {fast_model}
+"#
+    )
+}
+
 fn prompt_port(existing: Option<u16>) -> Result<u16> {
     let default = existing.unwrap_or(DEFAULT_PORT);
     println!("  {}", "(Your editor will connect to this port)".dimmed());
@@ -1880,7 +2402,12 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
     let config_dir = config.install_dir.join("config");
     std::fs::create_dir_all(&config_dir)?;
     let models_path = config_dir.join("models.yaml");
-    std::fs::write(&models_path, generate_models_yaml(config))?;
+    let models_yaml = if let Some(ref providers) = config.providers {
+        generate_cloud_models_yaml(providers)
+    } else {
+        generate_models_yaml(config)
+    };
+    std::fs::write(&models_path, models_yaml)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -2114,7 +2641,7 @@ fn strip_ollama_service(compose: &str) -> String {
 }
 
 fn generate_env(config: &SelfHostConfig) -> String {
-    // Build the credential lines for the embedding section
+    // Build the credential lines for the embedding section (standalone tiers)
     let credential_lines = match &config.embedding_credential {
         Some((var, val)) if var == "VERTEX" => {
             // Decode the packed VERTEX_PROJECT\x00VERTEX_LOCATION value
@@ -2131,6 +2658,21 @@ fn generate_env(config: &SelfHostConfig) -> String {
         String::new()
     } else {
         format!("{credential_lines}\n")
+    };
+
+    // Cloud tier credentials section
+    let cloud_credentials = if config.providers.is_some() && !config.collected_credentials.is_empty() {
+        let mut lines = vec!["# Cloud tier API credentials".to_string()];
+        let mut keys: Vec<_> = config.collected_credentials.keys().collect();
+        keys.sort();
+        for key in keys {
+            let value = &config.collected_credentials[key];
+            lines.push(format!("{}={}", key, value));
+        }
+        lines.push(String::new());
+        lines.join("\n")
+    } else {
+        String::new()
     };
 
     // Point to external Ollama when not using bundled container
@@ -2167,7 +2709,7 @@ EMBEDDING_DIMENSIONS={embedding_dimensions}
 # MEMGRAPH_PORT=7687
 ENGRAMMIC_CONFIG_DIR=/app/config-override
 {ollama_section}
-
+{cloud_credentials}
 # RERANKING (optional, improves recall quality)
 # Uncomment to enable. Cohere is the recommended provider.
 # RERANKING__ENABLED=true
@@ -2191,6 +2733,7 @@ TELEMETRY__ENABLED=false
         embedding_dimensions = config.embedding_dimensions,
         credential_section = credential_section,
         ollama_section = ollama_section,
+        cloud_credentials = cloud_credentials,
     )
 }
 
@@ -2471,6 +3014,53 @@ fn print_quick_reference(config: &SelfHostConfig) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn next_step_cloud_goes_to_llm_provider() {
+        assert_eq!(next_step(WizardStep::Tier, Tier::Cloud), WizardStep::LlmProvider);
+    }
+
+    #[test]
+    fn next_step_standalone_goes_to_ram_check() {
+        assert_eq!(next_step(WizardStep::Tier, Tier::Lite), WizardStep::RamCheck);
+        assert_eq!(next_step(WizardStep::Tier, Tier::Standard), WizardStep::RamCheck);
+        assert_eq!(next_step(WizardStep::Tier, Tier::Pro), WizardStep::RamCheck);
+    }
+
+    #[test]
+    fn prev_step_license_differs_by_tier() {
+        assert_eq!(prev_step(WizardStep::License, Tier::Cloud), WizardStep::Credentials);
+        assert_eq!(prev_step(WizardStep::License, Tier::Lite), WizardStep::RamCheck);
+    }
+
+    #[test]
+    fn generate_cloud_models_yaml_includes_all_providers() {
+        let set = ProviderSet {
+            llm: LlmProvider::Anthropic,
+            embedding: EmbeddingProvider::OpenAI,
+            reranker: RerankerProvider::Cohere,
+        };
+
+        let yaml = generate_cloud_models_yaml(&set);
+        assert!(yaml.contains("provider: anthropic"));
+        assert!(yaml.contains("provider: openai"));
+        assert!(yaml.contains("provider: cohere"));
+        assert!(yaml.contains("dimensions: 3072"));
+    }
+
+    #[test]
+    fn generate_cloud_models_yaml_omits_reranker_when_none() {
+        let set = ProviderSet {
+            llm: LlmProvider::OpenAI,
+            embedding: EmbeddingProvider::OpenAI,
+            reranker: RerankerProvider::None,
+        };
+
+        let yaml = generate_cloud_models_yaml(&set);
+        assert!(!yaml.contains("reranker:"));
+    }
+
     #[test]
     fn check_prerequisites_bail_message_is_specific() {
         // This test is documentation: check_prerequisites is not unit-testable
