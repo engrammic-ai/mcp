@@ -610,14 +610,16 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                     check_prerequisites()?;
                 }
 
-                if prompt_go_back()? {
-                    state.llm_provider = None;
-                    step = prev_step(WizardStep::LlmProvider, tier);
-                    continue;
+                match prompt_llm_provider()? {
+                    Some(provider) => {
+                        state.llm_provider = Some(provider);
+                        step = next_step(WizardStep::LlmProvider, tier);
+                    }
+                    None => {
+                        state.llm_provider = None;
+                        step = prev_step(WizardStep::LlmProvider, tier);
+                    }
                 }
-
-                state.llm_provider = Some(prompt_llm_provider()?);
-                step = next_step(WizardStep::LlmProvider, tier);
             }
 
             // ----------------------------------------------------------------
@@ -637,14 +639,16 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 );
                 println!();
 
-                if prompt_go_back()? {
-                    state.embedding_provider = None;
-                    step = prev_step(WizardStep::EmbeddingProvider, tier);
-                    continue;
+                match prompt_embedding_provider()? {
+                    Some(provider) => {
+                        state.embedding_provider = Some(provider);
+                        step = next_step(WizardStep::EmbeddingProvider, tier);
+                    }
+                    None => {
+                        state.embedding_provider = None;
+                        step = prev_step(WizardStep::EmbeddingProvider, tier);
+                    }
                 }
-
-                state.embedding_provider = Some(prompt_embedding_provider()?);
-                step = next_step(WizardStep::EmbeddingProvider, tier);
             }
 
             // ----------------------------------------------------------------
@@ -664,14 +668,16 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 );
                 println!();
 
-                if prompt_go_back()? {
-                    state.reranker_provider = None;
-                    step = prev_step(WizardStep::RerankerProvider, tier);
-                    continue;
+                match prompt_reranker_provider()? {
+                    Some(provider) => {
+                        state.reranker_provider = Some(provider);
+                        step = next_step(WizardStep::RerankerProvider, tier);
+                    }
+                    None => {
+                        state.reranker_provider = None;
+                        step = prev_step(WizardStep::RerankerProvider, tier);
+                    }
                 }
-
-                state.reranker_provider = Some(prompt_reranker_provider()?);
-                step = next_step(WizardStep::RerankerProvider, tier);
             }
 
             // ----------------------------------------------------------------
@@ -1753,17 +1759,19 @@ fn read_existing_ports(install_dir: &Path) -> (Option<u16>, Option<u16>) {
 // Cloud tier provider prompts
 // ============================================================================
 
-fn prompt_llm_provider() -> Result<LlmProvider> {
+/// Returns None if user chose to go back
+fn prompt_llm_provider() -> Result<Option<LlmProvider>> {
     use crate::providers::OtherProvider;
     use dialoguer::Password;
 
     let options = vec![
-        "OpenAI (gpt-4o / gpt-4o-mini)",
-        "Anthropic (claude-sonnet / claude-haiku)",
-        "Vertex AI (gemini-2.5-pro / gemini-2.5-flash)",
-        "Azure OpenAI (gpt-4o / gpt-4o-mini)",
-        "AWS Bedrock (claude-sonnet / claude-haiku)",
-        "Other (custom litellm provider)",
+        "1. OpenAI (gpt-4o / gpt-4o-mini)",
+        "2. Anthropic (claude-sonnet / claude-haiku)",
+        "3. Vertex AI (gemini-2.5-pro / gemini-2.5-flash)",
+        "4. Azure OpenAI (gpt-4o / gpt-4o-mini)",
+        "5. AWS Bedrock (claude-sonnet / claude-haiku)",
+        "6. Other (custom litellm provider)",
+        "← Go back",
     ];
 
     let idx = Select::new()
@@ -1773,11 +1781,11 @@ fn prompt_llm_provider() -> Result<LlmProvider> {
         .interact()?;
 
     match idx {
-        0 => Ok(LlmProvider::OpenAI),
-        1 => Ok(LlmProvider::Anthropic),
-        2 => Ok(LlmProvider::VertexAI),
-        3 => Ok(LlmProvider::AzureOpenAI),
-        4 => Ok(LlmProvider::Bedrock),
+        0 => Ok(Some(LlmProvider::OpenAI)),
+        1 => Ok(Some(LlmProvider::Anthropic)),
+        2 => Ok(Some(LlmProvider::VertexAI)),
+        3 => Ok(Some(LlmProvider::AzureOpenAI)),
+        4 => Ok(Some(LlmProvider::Bedrock)),
         5 => {
             let provider: String = Input::new()
                 .with_prompt("litellm provider name (e.g., groq, together_ai)")
@@ -1802,27 +1810,38 @@ fn prompt_llm_provider() -> Result<LlmProvider> {
                 env_vars.push((name, value));
             }
 
-            Ok(LlmProvider::Other(OtherProvider {
+            Ok(Some(LlmProvider::Other(OtherProvider {
                 provider,
                 model,
                 dimensions: None,
                 env_vars,
-            }))
+            })))
         }
+        6 => Ok(None), // Go back
         _ => unreachable!(),
     }
 }
 
-fn prompt_embedding_provider() -> Result<EmbeddingProvider> {
+/// Returns None if user chose to go back
+fn prompt_embedding_provider() -> Result<Option<EmbeddingProvider>> {
     use crate::providers::OtherProvider;
     use dialoguer::Password;
 
+    // Provider defaults: (provider_name, default_model, default_dims)
+    let provider_defaults: Vec<(&str, &str, u32)> = vec![
+        ("openai", "text-embedding-3-large", 3072),
+        ("vertex_ai", "text-embedding-005", 768),
+        ("azure", "text-embedding-3-large", 3072),
+        ("bedrock", "amazon.titan-embed-text-v2", 1024),
+    ];
+
     let options = vec![
-        "OpenAI (text-embedding-3-large, 3072 dims)",
-        "Vertex AI (text-embedding-005, 768 dims)",
-        "Azure OpenAI (text-embedding-3-large, 3072 dims)",
-        "AWS Bedrock (titan-embed-text-v2, 1024 dims)",
-        "Other (custom provider)",
+        "1. OpenAI (text-embedding-3-large, 3072 dims)",
+        "2. Vertex AI (text-embedding-005, 768 dims)",
+        "3. Azure OpenAI (text-embedding-3-large, 3072 dims)",
+        "4. AWS Bedrock (titan-embed-text-v2, 1024 dims)",
+        "5. Other (custom provider)",
+        "← Go back",
     ];
 
     let idx = Select::new()
@@ -1831,62 +1850,104 @@ fn prompt_embedding_provider() -> Result<EmbeddingProvider> {
         .default(0)
         .interact()?;
 
-    match idx {
-        0 => Ok(EmbeddingProvider::OpenAI),
-        1 => Ok(EmbeddingProvider::VertexAI),
-        2 => Ok(EmbeddingProvider::AzureOpenAI),
-        3 => Ok(EmbeddingProvider::Bedrock),
-        4 => {
-            let provider: String = Input::new()
-                .with_prompt("litellm provider name")
-                .interact_text()?;
-            let model: String = Input::new()
-                .with_prompt("Model ID")
-                .interact_text()?;
+    // Handle go back
+    if idx == 5 {
+        return Ok(None);
+    }
 
-            println!();
-            println!("  {} Embedding dimensions are critical for Qdrant compatibility.", "!".yellow());
-            println!("  {} Wrong dimensions will corrupt your vector store.", "!".yellow());
-            let dimensions: u32 = Input::new()
-                .with_prompt("Embedding dimensions")
-                .interact_text()?;
+    // Handle "Other"
+    if idx == 4 {
+        let provider: String = Input::new()
+            .with_prompt("litellm provider name")
+            .interact_text()?;
+        let model: String = Input::new()
+            .with_prompt("Model ID")
+            .interact_text()?;
 
-            println!("  Enter environment variables (empty name to finish):");
-            let mut env_vars = Vec::new();
-            loop {
-                let name: String = Input::new()
-                    .with_prompt("  Env var name")
-                    .allow_empty(true)
-                    .interact_text()?;
-                if name.is_empty() {
-                    break;
-                }
-                let value: String = Password::new()
-                    .with_prompt(format!("  {}", name))
-                    .interact()?;
-                env_vars.push((name, value));
+        println!();
+        println!("  {} Embedding dimensions are critical for Qdrant compatibility.", "!".yellow());
+        println!("  {} Wrong dimensions will corrupt your vector store.", "!".yellow());
+        let dimensions: u32 = Input::new()
+            .with_prompt("Embedding dimensions")
+            .interact_text()?;
+
+        println!("  Enter environment variables (empty name to finish):");
+        let mut env_vars = Vec::new();
+        loop {
+            let name: String = Input::new()
+                .with_prompt("  Env var name")
+                .allow_empty(true)
+                .interact_text()?;
+            if name.is_empty() {
+                break;
             }
-
-            Ok(EmbeddingProvider::Other(OtherProvider {
-                provider,
-                model,
-                dimensions: Some(dimensions),
-                env_vars,
-            }))
+            let value: String = Password::new()
+                .with_prompt(format!("  {}", name))
+                .interact()?;
+            env_vars.push((name, value));
         }
+
+        return Ok(Some(EmbeddingProvider::Other(OtherProvider {
+            provider,
+            model,
+            dimensions: Some(dimensions),
+            env_vars,
+        })));
+    }
+
+    // Standard provider selected - offer customization
+    let (default_provider, default_model, default_dims) = provider_defaults[idx];
+
+    println!();
+    println!("  Default: {} ({} dims)", default_model.cyan(), default_dims);
+
+    let customize = Confirm::new()
+        .with_prompt("  Customize model or dimensions?")
+        .default(false)
+        .interact()?;
+
+    if customize {
+        let model: String = Input::new()
+            .with_prompt("  Model ID")
+            .default(default_model.to_string())
+            .interact_text()?;
+
+        let dims_str: String = Input::new()
+            .with_prompt("  Dimensions")
+            .default(default_dims.to_string())
+            .interact_text()?;
+        let dimensions: u32 = dims_str.parse().unwrap_or(default_dims);
+
+        return Ok(Some(EmbeddingProvider::Other(OtherProvider {
+            provider: default_provider.to_string(),
+            model,
+            dimensions: Some(dimensions),
+            env_vars: vec![],
+        })));
+    }
+
+    // Return standard provider with defaults
+    match idx {
+        0 => Ok(Some(EmbeddingProvider::OpenAI)),
+        1 => Ok(Some(EmbeddingProvider::VertexAI)),
+        2 => Ok(Some(EmbeddingProvider::AzureOpenAI)),
+        3 => Ok(Some(EmbeddingProvider::Bedrock)),
         _ => unreachable!(),
     }
 }
 
-fn prompt_reranker_provider() -> Result<RerankerProvider> {
+/// Returns None if user chose to go back
+fn prompt_reranker_provider() -> Result<Option<RerankerProvider>> {
     use crate::providers::OtherProvider;
     use dialoguer::Password;
 
     let options = vec![
-        "None (disable reranking - faster but lower quality)",
-        "Cohere (rerank-v3.5)",
-        "Vertex AI (semantic-ranker)",
-        "Other (custom provider)",
+        "1. Local TEI (bge-reranker, bundled - no API cost)",
+        "2. None (disable reranking - faster but lower quality)",
+        "3. Cohere API (rerank-v3.5)",
+        "4. Vertex AI API (semantic-ranker)",
+        "5. Other (custom provider)",
+        "← Go back",
     ];
 
     let idx = Select::new()
@@ -1896,10 +1957,11 @@ fn prompt_reranker_provider() -> Result<RerankerProvider> {
         .interact()?;
 
     match idx {
-        0 => Ok(RerankerProvider::None),
-        1 => Ok(RerankerProvider::Cohere),
-        2 => Ok(RerankerProvider::VertexAI),
-        3 => {
+        0 => Ok(Some(RerankerProvider::LocalTei)),
+        1 => Ok(Some(RerankerProvider::None)),
+        2 => Ok(Some(RerankerProvider::Cohere)),
+        3 => Ok(Some(RerankerProvider::VertexAI)),
+        4 => {
             let provider: String = Input::new()
                 .with_prompt("litellm provider name")
                 .interact_text()?;
@@ -1923,15 +1985,43 @@ fn prompt_reranker_provider() -> Result<RerankerProvider> {
                 env_vars.push((name, value));
             }
 
-            Ok(RerankerProvider::Other(OtherProvider {
+            Ok(Some(RerankerProvider::Other(OtherProvider {
                 provider,
                 model,
                 dimensions: None,
                 env_vars,
-            }))
+            })))
         }
+        5 => Ok(None), // Go back
         _ => unreachable!(),
     }
+}
+
+/// Read existing API keys from ~/.engrammic/.env
+fn read_existing_credentials() -> HashMap<String, String> {
+    let mut creds = HashMap::new();
+
+    let env_path = dirs::home_dir()
+        .map(|h| h.join(".engrammic").join(".env"))
+        .unwrap_or_default();
+
+    if let Ok(content) = std::fs::read_to_string(&env_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim();
+                let value = value.trim();
+                if !value.is_empty() {
+                    creds.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+
+    creds
 }
 
 fn prompt_credentials(providers: &ProviderSet) -> Result<HashMap<String, String>> {
@@ -1944,14 +2034,48 @@ fn prompt_credentials(providers: &ProviderSet) -> Result<HashMap<String, String>
         return Ok(HashMap::new());
     }
 
+    // Read existing credentials
+    let existing = read_existing_credentials();
+
     println!();
     let env_var_names: Vec<_> = specs.iter().map(|s| s.env_var).collect();
     println!("  Your setup needs: {}", env_var_names.join(", "));
+
+    // Show which ones we found
+    let found: Vec<_> = specs.iter()
+        .filter(|s| existing.contains_key(s.env_var))
+        .map(|s| s.env_var)
+        .collect();
+    if !found.is_empty() {
+        println!("  {} Found in ~/.engrammic/.env: {}", "✓".green(), found.join(", "));
+    }
     println!();
 
     let mut creds = HashMap::new();
 
     for spec in specs {
+        // Check if we have an existing value
+        if let Some(existing_value) = existing.get(spec.env_var) {
+            let masked = if spec.secret && existing_value.len() > 8 {
+                format!("{}...{}", &existing_value[..4], &existing_value[existing_value.len()-4..])
+            } else if spec.secret {
+                "****".to_string()
+            } else {
+                existing_value.clone()
+            };
+
+            let use_existing = Confirm::new()
+                .with_prompt(format!("  Use existing {} ({})?", spec.env_var, masked))
+                .default(true)
+                .interact()?;
+
+            if use_existing {
+                creds.insert(spec.env_var.to_string(), existing_value.clone());
+                continue;
+            }
+        }
+
+        // Prompt for new value
         let value = if spec.secret {
             Password::new()
                 .with_prompt(format!("  {}", spec.prompt))

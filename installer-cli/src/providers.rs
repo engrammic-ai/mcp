@@ -160,6 +160,7 @@ impl EmbeddingProvider {
 /// Reranker provider selection for Cloud tier.
 #[derive(Debug, Clone)]
 pub enum RerankerProvider {
+    LocalTei,  // Bundled TEI reranker (bge-reranker-v2-m3)
     None,
     Cohere,
     VertexAI,
@@ -169,6 +170,7 @@ pub enum RerankerProvider {
 impl RerankerProvider {
     pub fn provider_name(&self) -> Option<&str> {
         match self {
+            RerankerProvider::LocalTei => Some("tei"),
             RerankerProvider::None => Option::None,
             RerankerProvider::Cohere => Some("cohere"),
             RerankerProvider::VertexAI => Some("vertex_ai"),
@@ -178,6 +180,7 @@ impl RerankerProvider {
 
     pub fn model(&self) -> Option<&str> {
         match self {
+            RerankerProvider::LocalTei => Some("BAAI/bge-reranker-v2-m3"),
             RerankerProvider::None => Option::None,
             RerankerProvider::Cohere => Some("rerank-v3.5"),
             RerankerProvider::VertexAI => Some("semantic-ranker-default@latest"),
@@ -189,8 +192,13 @@ impl RerankerProvider {
         matches!(self, RerankerProvider::None)
     }
 
+    pub fn is_local(&self) -> bool {
+        matches!(self, RerankerProvider::LocalTei)
+    }
+
     pub fn required_credentials(&self) -> Vec<CredentialSpec> {
         match self {
+            RerankerProvider::LocalTei => vec![], // No credentials needed
             RerankerProvider::None => vec![],
             RerankerProvider::Cohere => vec![CredentialSpec {
                 env_var: "COHERE_API_KEY",
