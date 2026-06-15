@@ -3,7 +3,33 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// Self-hosted configuration choices persisted for reconfigure.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SelfHostState {
+    /// Installer version that generated the configs.
+    #[serde(default)]
+    pub installer_version: Option<String>,
+    /// Tier: "cloud", "standalone_standard", "standalone_pro".
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// LLM provider for Cloud tier: "openai", "anthropic", "vertex_ai", etc.
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    /// Embedding provider: "openai", "vertex_ai", etc.
+    #[serde(default)]
+    pub embedding_provider: Option<String>,
+    /// Reranker provider: "local_tei", "cohere", "vertex_ai", "none".
+    #[serde(default)]
+    pub reranker_provider: Option<String>,
+    /// Whether using external Ollama (not bundled container).
+    #[serde(default)]
+    pub use_external_ollama: bool,
+    /// Whether using Podman instead of Docker.
+    #[serde(default)]
+    pub podman: bool,
+}
 
 /// One harness (editor) whose config file we edited.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +103,9 @@ pub struct Manifest {
     /// succeeds. Old manifests without this field deserialize to `partial`.
     #[serde(default)]
     pub status: InstallStatus,
+    /// Self-hosted configuration choices for reconfigure.
+    #[serde(default)]
+    pub selfhost: SelfHostState,
 }
 
 impl Default for Manifest {
@@ -90,6 +119,7 @@ impl Default for Manifest {
             harnesses: Vec::new(),
             skills: Vec::new(),
             status: InstallStatus::Partial,
+            selfhost: SelfHostState::default(),
         }
     }
 }

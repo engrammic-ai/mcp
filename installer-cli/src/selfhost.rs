@@ -132,8 +132,9 @@ struct ExistingConfig {
     embedding_model: Option<String>,
     embedding_dimensions: Option<u32>,
     postgres_password: Option<String>,
-    openai_api_key: Option<String>,
     ollama_host: Option<String>,
+    /// Cloud tier API credentials (env var name -> value).
+    credentials: HashMap<String, String>,
 }
 
 /// Read existing configuration from .env file in install directory.
@@ -168,11 +169,16 @@ fn read_existing_env(install_dir: &Path) -> ExistingConfig {
                 "POSTGRES_PASSWORD" if !value.is_empty() => {
                     config.postgres_password = Some(value.to_string());
                 }
-                "OPENAI_API_KEY" if !value.is_empty() => {
-                    config.openai_api_key = Some(value.to_string());
-                }
                 "OLLAMA_HOST" if !value.is_empty() => {
                     config.ollama_host = Some(value.to_string());
+                }
+                // Collect Cloud tier API credentials
+                "OPENAI_API_KEY" | "ANTHROPIC_API_KEY" | "COHERE_API_KEY" |
+                "AZURE_API_KEY" | "AZURE_API_BASE" | "AZURE_API_VERSION" |
+                "VERTEX_PROJECT" | "VERTEX_LOCATION" | "AWS_REGION"
+                    if !value.is_empty() =>
+                {
+                    config.credentials.insert(key.to_string(), value.to_string());
                 }
                 _ => {}
             }
@@ -332,6 +338,27 @@ impl Tier {
     pub fn is_standalone(&self) -> bool {
         !matches!(self, Tier::Cloud)
     }
+
+    /// String ID for serialization to state.toml.
+    pub fn id(&self) -> &'static str {
+        match self {
+            Tier::Lite => "standalone_lite",
+            Tier::Standard => "standalone_standard",
+            Tier::Pro => "standalone_pro",
+            Tier::Cloud => "cloud",
+        }
+    }
+
+    /// Parse from string ID.
+    pub fn from_id(s: &str) -> Option<Self> {
+        match s {
+            "standalone_lite" | "lite" => Some(Tier::Lite),
+            "standalone_standard" | "standard" => Some(Tier::Standard),
+            "standalone_pro" | "pro" => Some(Tier::Pro),
+            "cloud" => Some(Tier::Cloud),
+            _ => None,
+        }
+    }
 }
 
 /// Probe for an existing Ollama instance at the default local address.
@@ -346,6 +373,40 @@ pub fn detect_existing_ollama() -> Option<String> {
     match response {
         Ok(_) => Some("localhost:11434".to_string()),
         Err(_) => None,
+    }
+}
+
+/// Parse LLM provider from string ID (for state restoration).
+fn parse_llm_provider(s: &str) -> Option<LlmProvider> {
+    match s {
+        "openai" => Some(LlmProvider::OpenAI),
+        "anthropic" => Some(LlmProvider::Anthropic),
+        "vertex_ai" => Some(LlmProvider::VertexAI),
+        "azure" => Some(LlmProvider::AzureOpenAI),
+        "bedrock" => Some(LlmProvider::Bedrock),
+        _ => None,
+    }
+}
+
+/// Parse embedding provider from string ID (for state restoration).
+fn parse_embedding_provider(s: &str) -> Option<EmbeddingProvider> {
+    match s {
+        "openai" => Some(EmbeddingProvider::OpenAI),
+        "vertex_ai" => Some(EmbeddingProvider::VertexAI),
+        "azure" => Some(EmbeddingProvider::AzureOpenAI),
+        "bedrock" => Some(EmbeddingProvider::Bedrock),
+        _ => None,
+    }
+}
+
+/// Parse reranker provider from string ID (for state restoration).
+fn parse_reranker_provider(s: &str) -> Option<RerankerProvider> {
+    match s {
+        "tei" | "local_tei" => Some(RerankerProvider::LocalTei),
+        "cohere" => Some(RerankerProvider::Cohere),
+        "vertex_ai" => Some(RerankerProvider::VertexAI),
+        "none" => Some(RerankerProvider::None),
+        _ => None,
     }
 }
 
@@ -411,6 +472,24 @@ pub fn run_wizard(podman: bool) -> Result<()> {
         match idx {
             0 => {
                 // Reconfigure: pre-populate state with existing values
+                let manifest = crate::manifest::Manifest::load_or_migrate(None).ok();
+                let selfhost_state = manifest.as_ref().map(|m| &m.selfhost);
+
+                // Check if installer version changed
+                if let Some(ref ss) = selfhost_state {
+                    if let Some(ref old_ver) = ss.installer_version {
+                        let current_ver = env!("CARGO_PKG_VERSION");
+                        if old_ver != current_ver {
+                            println!(
+                                "  {} Installer upgraded {} → {} - configs will be regenerated",
+                                "↑".cyan(),
+                                old_ver,
+                                current_ver
+                            );
+                        }
+                    }
+                }
+
                 println!("  {} Reconfigure mode - existing values shown as defaults", "→".yellow());
                 state.install_dir = Some(default_dir.clone());
                 state.license_key = existing_env.license_key;
@@ -419,8 +498,31 @@ pub fn run_wizard(podman: bool) -> Result<()> {
                 state.postgres_password = existing_env.postgres_password;
                 state.port = existing_ports.0;
                 state.dagster_port = existing_ports.1;
-                // Detect external ollama from existing config
-                state.use_external_ollama = existing_env.ollama_host.map(|_| true);
+
+                // Restore tier and provider choices from manifest
+                if let Some(ref ss) = selfhost_state {
+                    state.podman = ss.podman;
+                    state.use_external_ollama = Some(ss.use_external_ollama);
+
+                    // Restore tier
+                    if let Some(ref tier_id) = ss.tier {
+                        state.tier = Tier::from_id(tier_id);
+                    }
+
+                    // Restore Cloud tier providers
+                    if let Some(ref llm) = ss.llm_provider {
+                        state.llm_provider = parse_llm_provider(llm);
+                    }
+                    if let Some(ref emb) = ss.embedding_provider {
+                        state.embedding_provider = parse_embedding_provider(emb);
+                    }
+                    if let Some(ref rr) = ss.reranker_provider {
+                        state.reranker_provider = parse_reranker_provider(rr);
+                    }
+                }
+
+                // Restore API credentials from existing .env
+                state.collected_credentials = existing_env.credentials.clone();
             }
             1 => {
                 // Fresh install: continue with empty state
@@ -2554,6 +2656,28 @@ fn write_config_files(config: &SelfHostConfig) -> Result<()> {
         models_path.display().to_string().dimmed()
     );
 
+    // Persist selfhost configuration choices for reconfigure
+    save_selfhost_state(config)?;
+
+    Ok(())
+}
+
+/// Persist selfhost configuration choices to manifest for reconfigure.
+fn save_selfhost_state(config: &SelfHostConfig) -> Result<()> {
+    use crate::manifest::{Manifest, SelfHostState};
+
+    let mut manifest = Manifest::load_or_migrate(None)?;
+    manifest.selfhost_dir = Some(config.install_dir.clone());
+    manifest.selfhost = SelfHostState {
+        installer_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        tier: Some(config.tier.id().to_string()),
+        llm_provider: config.providers.as_ref().map(|p| p.llm.provider_name().to_string()),
+        embedding_provider: config.providers.as_ref().map(|p| p.embedding.provider_name().to_string()),
+        reranker_provider: config.providers.as_ref().and_then(|p| p.reranker.provider_name().map(|s| s.to_string())),
+        use_external_ollama: config.use_external_ollama,
+        podman: config.podman,
+    };
+    manifest.save()?;
     Ok(())
 }
 
