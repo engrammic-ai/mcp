@@ -1,7 +1,7 @@
 # Self-hosted model configuration
 # See: https://docs.engrammic.ai/docs/reference/config-files
 
-default_tier: self_hosted
+tier: self_hosted
 
 tiers:
   self_hosted:
