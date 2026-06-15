@@ -2157,6 +2157,17 @@ fn generate_cloud_models_yaml(providers: &ProviderSet) -> String {
 
     let reranker_section = if providers.reranker.is_none() {
         String::new()
+    } else if providers.reranker.is_local() {
+        // LocalTei needs url field pointing to the bundled container
+        format!(
+            r#"    reranker:
+      provider: {}
+      model: {}
+      url: http://tei-reranker:8080
+"#,
+            providers.reranker.provider_name().unwrap(),
+            providers.reranker.model().unwrap()
+        )
     } else {
         format!(
             r#"    reranker:
@@ -2571,6 +2582,13 @@ fn generate_compose(config: &SelfHostConfig) -> String {
             .replace("standalone-pro.env", ".env");
     }
 
+    // Add tei-reranker service for Cloud tier with LocalTei
+    if let Some(ref providers) = config.providers {
+        if providers.reranker.is_local() {
+            compose = inject_tei_reranker_service(&compose);
+        }
+    }
+
     // Strip ollama service when using external Ollama
     if config.use_external_ollama {
         compose = strip_ollama_service(&compose);
@@ -2590,6 +2608,55 @@ fn generate_compose(config: &SelfHostConfig) -> String {
     }
 
     compose
+}
+
+/// Inject tei-reranker service and volume into compose for Cloud tier with LocalTei.
+fn inject_tei_reranker_service(compose: &str) -> String {
+    const TEI_RERANKER_SERVICE: &str = r#"
+  tei-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: engrammic-tei-reranker
+    ports:
+      - "8082:8080"
+    volumes:
+      - tei-reranker-models:/data
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--port", "8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          memory: 10G
+    restart: unless-stopped
+"#;
+
+    let mut result = compose.to_string();
+
+    // Find the volumes: section and add the service before it
+    if let Some(volumes_idx) = result.find("\nvolumes:") {
+        result.insert_str(volumes_idx, TEI_RERANKER_SERVICE);
+    }
+
+    // Add the volume definition at the end
+    if !result.contains("tei-reranker-models:") {
+        result.push_str("  tei-reranker-models:\n");
+    }
+
+    // Add dependency to app service
+    if result.contains("depends_on:") {
+        // Find app service depends_on and add tei-reranker
+        // This is a bit hacky but works for the standard compose structure
+        result = result.replace(
+            "      redis:\n        condition: service_healthy\n    healthcheck:",
+            "      redis:\n        condition: service_healthy\n      tei-reranker:\n        condition: service_healthy\n    healthcheck:",
+        );
+    }
+
+    result
 }
 
 /// Add `:Z` SELinux label to named volume mounts in a compose string.
@@ -2785,19 +2852,35 @@ fn generate_env(config: &SelfHostConfig) -> String {
     };
 
     // Cloud tier credentials section
-    let cloud_credentials = if config.providers.is_some() && !config.collected_credentials.is_empty() {
-        let mut lines = vec!["# Cloud tier API credentials".to_string()];
-        let mut keys: Vec<_> = config.collected_credentials.keys().collect();
-        keys.sort();
-        for key in keys {
-            let value = &config.collected_credentials[key];
-            lines.push(format!("{}={}", key, value));
+    let mut cloud_credentials = String::new();
+    if let Some(ref providers) = config.providers {
+        let mut lines = Vec::new();
+
+        // Add TEI_RERANKER_URL for LocalTei
+        if providers.reranker.is_local() {
+            lines.push("# Local TEI reranker".to_string());
+            lines.push("TEI_RERANKER_URL=http://tei-reranker:8080".to_string());
         }
-        lines.push(String::new());
-        lines.join("\n")
-    } else {
-        String::new()
-    };
+
+        // Add collected API credentials
+        if !config.collected_credentials.is_empty() {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.push("# Cloud tier API credentials".to_string());
+            let mut keys: Vec<_> = config.collected_credentials.keys().collect();
+            keys.sort();
+            for key in keys {
+                let value = &config.collected_credentials[key];
+                lines.push(format!("{}={}", key, value));
+            }
+        }
+
+        if !lines.is_empty() {
+            lines.push(String::new());
+            cloud_credentials = lines.join("\n");
+        }
+    }
 
     // Point to external Ollama when not using bundled container
     let ollama_section = if config.use_external_ollama {
