@@ -48,6 +48,8 @@ pub enum ConfigShape {
     OpenCodeJson,
     /// Continue.dev project YAML: top-level `mcpServers` list with `{ name, type, url }` objects.
     ContinueYaml,
+    /// Hermes YAML: `mcp_servers` map keyed by server name with `url` field.
+    HermesYaml,
 }
 
 /// How the installer registers the MCP server for a harness.
@@ -266,6 +268,18 @@ impl Tool {
                 config_path: home.join(".junie/mcp/mcp.json"),
                 method: InstallMethod::FileEdit(JUNIE_JSON),
             },
+            Tool {
+                name: "OpenClaw",
+                id: "openclaw",
+                config_path: home.join(".openclaw/mcp.json"),
+                method: InstallMethod::FileEdit(STANDARD_JSON),
+            },
+            Tool {
+                name: "Hermes Agent",
+                id: "hermes",
+                config_path: home.join(".hermes/config.yaml"),
+                method: InstallMethod::FileEdit(ConfigShape::HermesYaml),
+            },
             // --- Phase 3: project-level / GUI-only ---
             Tool {
                 name: "Continue.dev",
@@ -359,6 +373,8 @@ impl SkillDest {
 
         let claude_present = home.join(".claude").exists();
         let pi_present = home.join(".pi/agent").exists();
+        let openclaw_present = home.join(".openclaw").exists();
+        let hermes_present = home.join(".hermes").exists();
 
         let cursor_present = home.join(".cursor").exists();
         let gemini_present = home.join(".gemini").exists();
@@ -400,6 +416,24 @@ impl SkillDest {
                 scope: SkillScope::User,
                 format: SkillFormat::AgentsMd,
                 default: codex_present && !claude_present,
+                note: None,
+            },
+            SkillDest {
+                name: "OpenClaw",
+                harness: "openclaw",
+                path: home.join(".openclaw/skills"),
+                scope: SkillScope::User,
+                format: SkillFormat::Directory,
+                default: openclaw_present && !claude_present,
+                note: None,
+            },
+            SkillDest {
+                name: "Hermes Agent",
+                harness: "hermes",
+                path: home.join(".hermes/skills"),
+                scope: SkillScope::User,
+                format: SkillFormat::Directory,
+                default: hermes_present && !claude_present,
                 note: None,
             },
             // === Project-level destinations ===

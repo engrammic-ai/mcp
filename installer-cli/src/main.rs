@@ -2063,6 +2063,7 @@ fn print_harnesses_json() -> Result<()> {
                     ConfigShape::GooseYaml => ("yaml", Some("extensions"), "file-edit"),
                     ConfigShape::OpenCodeJson => ("json", Some("mcp"), "file-edit"),
                     ConfigShape::ContinueYaml => ("yaml", Some("mcpServers"), "file-edit"),
+                    ConfigShape::HermesYaml => ("yaml", Some("mcp_servers"), "file-edit"),
                 },
                 InstallMethod::DeepLink(_) => ("none", None, "deep-link"),
                 InstallMethod::PrintInstructions(_) => ("none", None, "print"),

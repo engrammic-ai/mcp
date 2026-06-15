@@ -31,6 +31,7 @@ pub fn install(config_path: &Path, endpoint: &str, shape: ConfigShape) -> Result
         ConfigShape::GooseYaml => install_goose_yaml(config_path, endpoint),
         ConfigShape::OpenCodeJson => install_opencode_json(config_path, endpoint),
         ConfigShape::ContinueYaml => install_continue_yaml(config_path, endpoint),
+        ConfigShape::HermesYaml => install_hermes_yaml(config_path, endpoint),
     }
 }
 
@@ -41,6 +42,7 @@ pub fn uninstall(config_path: &Path, shape: ConfigShape) -> Result<()> {
         ConfigShape::GooseYaml => uninstall_goose_yaml(config_path),
         ConfigShape::OpenCodeJson => uninstall_json_map(config_path, "mcp"),
         ConfigShape::ContinueYaml => uninstall_continue_yaml(config_path),
+        ConfigShape::HermesYaml => uninstall_hermes_yaml(config_path),
     }
 }
 
@@ -55,6 +57,7 @@ pub fn get_installed_endpoint(config_path: &Path, shape: ConfigShape) -> Option<
         ConfigShape::GooseYaml => get_endpoint_goose_yaml(config_path),
         ConfigShape::OpenCodeJson => get_endpoint_json_map(config_path, "mcp", "url"),
         ConfigShape::ContinueYaml => get_endpoint_continue_yaml(config_path),
+        ConfigShape::HermesYaml => get_endpoint_hermes_yaml(config_path),
     }
 }
 
@@ -578,6 +581,87 @@ fn get_endpoint_continue_yaml(config_path: &Path) -> Option<String> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// Hermes YAML shape
+//
+// ~/.hermes/config.yaml — `mcp_servers` map keyed by server name.
+// Entry: `{ url: <url> }`.
+// Preserves all other top-level keys and other mcp_servers entries.
+// ---------------------------------------------------------------------------
+
+fn install_hermes_yaml(config_path: &Path, endpoint: &str) -> Result<InstallResult> {
+    let mut root = read_yaml(config_path)?;
+
+    let root_map = root
+        .as_mapping_mut()
+        .context("hermes config root is not a YAML mapping")?;
+
+    let servers_key = YamlValue::String("mcp_servers".to_string());
+    if !root_map.contains_key(&servers_key) {
+        root_map.insert(
+            servers_key.clone(),
+            YamlValue::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+
+    let servers = root_map
+        .get_mut(&servers_key)
+        .and_then(|v| v.as_mapping_mut())
+        .context("hermes config 'mcp_servers' is not a YAML mapping")?;
+
+    let server_key = YamlValue::String(MCP_SERVER_KEY.to_string());
+    let old_url = servers
+        .get(&server_key)
+        .and_then(|v| v.as_mapping())
+        .and_then(|m| m.get(YamlValue::String("url".to_string())))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let result = match old_url {
+        Some(ref url) if url == endpoint => InstallResult::Unchanged,
+        Some(url) => InstallResult::Updated { old_url: url },
+        None => InstallResult::Created,
+    };
+
+    if !matches!(result, InstallResult::Unchanged) {
+        let mut entry = serde_yaml::Mapping::new();
+        entry.insert(
+            YamlValue::String("url".to_string()),
+            YamlValue::String(endpoint.to_string()),
+        );
+        servers.insert(server_key, YamlValue::Mapping(entry));
+        write_yaml(config_path, &root)?;
+    }
+
+    Ok(result)
+}
+
+fn uninstall_hermes_yaml(config_path: &Path) -> Result<()> {
+    let mut root = read_yaml(config_path)?;
+
+    if let Some(servers) = root
+        .as_mapping_mut()
+        .and_then(|m| m.get_mut(YamlValue::String("mcp_servers".to_string())))
+        .and_then(|v| v.as_mapping_mut())
+    {
+        servers.remove(YamlValue::String(MCP_SERVER_KEY.to_string()));
+    }
+
+    write_yaml(config_path, &root)
+}
+
+fn get_endpoint_hermes_yaml(config_path: &Path) -> Option<String> {
+    let root = read_yaml(config_path).ok()?;
+    root.as_mapping()?
+        .get(YamlValue::String("mcp_servers".to_string()))?
+        .as_mapping()?
+        .get(YamlValue::String(MCP_SERVER_KEY.to_string()))?
+        .as_mapping()?
+        .get(YamlValue::String("url".to_string()))?
+        .as_str()
+        .map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,6 +1119,72 @@ approval = \"on-request\"  # inline comment
         }
         assert!(matches!(
             install(&path, EP, ConfigShape::ContinueYaml).unwrap(),
+            InstallResult::Unchanged
+        ));
+    }
+
+    // --- Hermes YAML ---
+
+    #[test]
+    fn hermes_yaml_install_creates_and_is_installed() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(".hermes/config.yaml");
+
+        assert!(matches!(
+            install(&path, EP, ConfigShape::HermesYaml).unwrap(),
+            InstallResult::Created
+        ));
+        assert!(is_installed(&path, EP, ConfigShape::HermesYaml));
+        assert!(!is_installed(&path, EP2, ConfigShape::HermesYaml));
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("mcp_servers:"));
+        assert!(content.contains("engrammic:"));
+        assert!(content.contains("url:"));
+        assert!(content.contains(EP));
+    }
+
+    #[test]
+    fn hermes_yaml_preserves_other_servers_and_keys() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "timeout: 60\nmcp_servers:\n  other:\n    url: https://other.example/mcp\n",
+        )
+        .unwrap();
+
+        install(&path, EP, ConfigShape::HermesYaml).unwrap();
+        assert!(is_installed(&path, EP, ConfigShape::HermesYaml));
+
+        let v: YamlValue = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["timeout"].as_i64().unwrap(), 60);
+        assert!(v["mcp_servers"]["other"].is_mapping());
+        assert!(v["mcp_servers"]["engrammic"].is_mapping());
+
+        uninstall(&path, ConfigShape::HermesYaml).unwrap();
+        let v: YamlValue = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(v["mcp_servers"].get("engrammic").is_none());
+        assert!(v["mcp_servers"]["other"].is_mapping());
+        assert_eq!(v["timeout"].as_i64().unwrap(), 60);
+    }
+
+    #[test]
+    fn hermes_yaml_update_and_unchanged() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        install(&path, EP2, ConfigShape::HermesYaml).unwrap();
+        match install(&path, EP, ConfigShape::HermesYaml).unwrap() {
+            InstallResult::Updated { old_url } => assert_eq!(old_url, EP2),
+            other => panic!(
+                "expected Updated, got {:?}",
+                matches!(other, InstallResult::Created)
+            ),
+        }
+        assert!(matches!(
+            install(&path, EP, ConfigShape::HermesYaml).unwrap(),
             InstallResult::Unchanged
         ));
     }
