@@ -2765,9 +2765,16 @@ fn inject_tei_reranker_service(compose: &str) -> String {
         result.insert_str(volumes_idx, TEI_RERANKER_SERVICE);
     }
 
-    // Add the volume definition at the end
+    // Add the volume definition inside the volumes: section
     if !result.contains("tei-reranker-models:") {
-        result.push_str("  tei-reranker-models:\n");
+        // Find the volumes: line and insert after it
+        if let Some(volumes_idx) = result.find("\nvolumes:\n") {
+            let insert_pos = volumes_idx + "\nvolumes:\n".len();
+            result.insert_str(insert_pos, "  tei-reranker-models:\n");
+        } else {
+            // Fallback: append volumes section if not found
+            result.push_str("\nvolumes:\n  tei-reranker-models:\n");
+        }
     }
 
     // Add dependency to app service
