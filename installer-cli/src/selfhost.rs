@@ -2766,7 +2766,8 @@ fn inject_tei_reranker_service(compose: &str) -> String {
     }
 
     // Add the volume definition inside the volumes: section
-    if !result.contains("tei-reranker-models:") {
+    // Check for top-level volume def (with proper indentation), not the service mount
+    if !result.contains("\n  tei-reranker-models:") {
         // Find the volumes: line and insert after it
         if let Some(volumes_idx) = result.find("\nvolumes:\n") {
             let insert_pos = volumes_idx + "\nvolumes:\n".len();
