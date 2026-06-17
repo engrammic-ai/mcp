@@ -26,7 +26,8 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_USER=engrammic
       - POSTGRES_DATABASE=engrammic
-      - GOOGLE_APPLICATION_CREDENTIALS=/mnt/gcloud/application_default_credentials.json
+      # GOOGLE_APPLICATION_CREDENTIALS is intentionally NOT set here.
+      # This allows ADC to fall through to GCE metadata on cloud VMs.
       # LiteLLM Vertex AI env vars (mapped from .env)
       - VERTEXAI_PROJECT=${VERTEX_PROJECT:-}
       - VERTEXAI_LOCATION=${VERTEX_LOCATION:-}
@@ -72,7 +73,8 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_USER=engrammic
       - POSTGRES_DATABASE=engrammic
-      - GOOGLE_APPLICATION_CREDENTIALS=/mnt/gcloud/application_default_credentials.json
+      # GOOGLE_APPLICATION_CREDENTIALS is intentionally NOT set here.
+      # This allows ADC to fall through to GCE metadata on cloud VMs.
       - VERTEXAI_PROJECT=${VERTEX_PROJECT:-}
       - VERTEXAI_LOCATION=${VERTEX_LOCATION:-}
     depends_on:
