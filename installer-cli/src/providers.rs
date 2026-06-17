@@ -20,7 +20,8 @@ pub struct CredentialSpec {
 pub enum LlmProvider {
     OpenAI,
     Anthropic,
-    VertexAI,
+    GeminiAPI,  // Google AI Studio - uses API key
+    VertexAI,   // GCP Vertex AI - uses service account
     AzureOpenAI,
     Bedrock,
     Other(OtherProvider),
@@ -37,6 +38,11 @@ impl LlmProvider {
             LlmProvider::Anthropic => vec![CredentialSpec {
                 env_var: "ANTHROPIC_API_KEY",
                 prompt: "Anthropic API key",
+                secret: true,
+            }],
+            LlmProvider::GeminiAPI => vec![CredentialSpec {
+                env_var: "GEMINI_API_KEY",
+                prompt: "Gemini API key (from ai.google.dev)",
                 secret: true,
             }],
             LlmProvider::VertexAI => vec![
@@ -60,6 +66,7 @@ impl LlmProvider {
         match self {
             LlmProvider::OpenAI => "openai",
             LlmProvider::Anthropic => "anthropic",
+            LlmProvider::GeminiAPI => "gemini",
             LlmProvider::VertexAI => "vertex_ai",
             LlmProvider::AzureOpenAI => "azure",
             LlmProvider::Bedrock => "bedrock",
@@ -72,6 +79,7 @@ impl LlmProvider {
         match self {
             LlmProvider::OpenAI => "gpt-4o",
             LlmProvider::Anthropic => "claude-sonnet-4-5",
+            LlmProvider::GeminiAPI => "gemini-2.5-pro",
             LlmProvider::VertexAI => "gemini-2.5-pro",
             LlmProvider::AzureOpenAI => "gpt-4o",
             LlmProvider::Bedrock => "anthropic.claude-sonnet",
@@ -84,6 +92,7 @@ impl LlmProvider {
         match self {
             LlmProvider::OpenAI => "gpt-4o-mini",
             LlmProvider::Anthropic => "claude-haiku-4-5",
+            LlmProvider::GeminiAPI => "gemini-2.5-flash",
             LlmProvider::VertexAI => "gemini-2.5-flash",
             LlmProvider::AzureOpenAI => "gpt-4o-mini",
             LlmProvider::Bedrock => "anthropic.claude-haiku",
@@ -96,7 +105,8 @@ impl LlmProvider {
 #[derive(Debug, Clone)]
 pub enum EmbeddingProvider {
     OpenAI,
-    VertexAI,
+    GeminiAPI,  // Google AI Studio - uses API key
+    VertexAI,   // GCP Vertex AI - uses service account
     AzureOpenAI,
     Bedrock,
     Other(OtherProvider),
@@ -106,6 +116,7 @@ impl EmbeddingProvider {
     pub fn provider_name(&self) -> &str {
         match self {
             EmbeddingProvider::OpenAI => "openai",
+            EmbeddingProvider::GeminiAPI => "gemini",
             EmbeddingProvider::VertexAI => "vertex_ai",
             EmbeddingProvider::AzureOpenAI => "azure",
             EmbeddingProvider::Bedrock => "bedrock",
@@ -116,6 +127,7 @@ impl EmbeddingProvider {
     pub fn model(&self) -> &str {
         match self {
             EmbeddingProvider::OpenAI => "text-embedding-3-large",
+            EmbeddingProvider::GeminiAPI => "text-embedding-004",
             EmbeddingProvider::VertexAI => "text-embedding-005",
             EmbeddingProvider::AzureOpenAI => "text-embedding-3-large",
             EmbeddingProvider::Bedrock => "amazon.titan-embed-text-v2",
@@ -126,6 +138,7 @@ impl EmbeddingProvider {
     pub fn dimensions(&self) -> u32 {
         match self {
             EmbeddingProvider::OpenAI => 3072,
+            EmbeddingProvider::GeminiAPI => 768,
             EmbeddingProvider::VertexAI => 768,
             EmbeddingProvider::AzureOpenAI => 3072,
             EmbeddingProvider::Bedrock => 1024,
@@ -138,6 +151,11 @@ impl EmbeddingProvider {
             EmbeddingProvider::OpenAI => vec![CredentialSpec {
                 env_var: "OPENAI_API_KEY",
                 prompt: "OpenAI API key",
+                secret: true,
+            }],
+            EmbeddingProvider::GeminiAPI => vec![CredentialSpec {
+                env_var: "GEMINI_API_KEY",
+                prompt: "Gemini API key (from ai.google.dev)",
                 secret: true,
             }],
             EmbeddingProvider::VertexAI => vec![

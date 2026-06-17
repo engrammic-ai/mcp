@@ -381,6 +381,7 @@ fn parse_llm_provider(s: &str) -> Option<LlmProvider> {
     match s {
         "openai" => Some(LlmProvider::OpenAI),
         "anthropic" => Some(LlmProvider::Anthropic),
+        "gemini" => Some(LlmProvider::GeminiAPI),
         "vertex_ai" => Some(LlmProvider::VertexAI),
         "azure" => Some(LlmProvider::AzureOpenAI),
         "bedrock" => Some(LlmProvider::Bedrock),
@@ -392,6 +393,7 @@ fn parse_llm_provider(s: &str) -> Option<LlmProvider> {
 fn parse_embedding_provider(s: &str) -> Option<EmbeddingProvider> {
     match s {
         "openai" => Some(EmbeddingProvider::OpenAI),
+        "gemini" => Some(EmbeddingProvider::GeminiAPI),
         "vertex_ai" => Some(EmbeddingProvider::VertexAI),
         "azure" => Some(EmbeddingProvider::AzureOpenAI),
         "bedrock" => Some(EmbeddingProvider::Bedrock),
@@ -1869,10 +1871,11 @@ fn prompt_llm_provider() -> Result<Option<LlmProvider>> {
     let options = vec![
         "1. OpenAI (gpt-4o / gpt-4o-mini)",
         "2. Anthropic (claude-sonnet / claude-haiku)",
-        "3. Vertex AI (gemini-2.5-pro / gemini-2.5-flash)",
-        "4. Azure OpenAI (gpt-4o / gpt-4o-mini)",
-        "5. AWS Bedrock (claude-sonnet / claude-haiku)",
-        "6. Other (custom litellm provider)",
+        "3. Gemini API (gemini-2.5-pro / gemini-2.5-flash) - API key",
+        "4. Vertex AI (gemini-2.5-pro / gemini-2.5-flash) - GCP service account",
+        "5. Azure OpenAI (gpt-4o / gpt-4o-mini)",
+        "6. AWS Bedrock (claude-sonnet / claude-haiku)",
+        "7. Other (custom litellm provider)",
         "← Go back",
     ];
 
@@ -1885,10 +1888,11 @@ fn prompt_llm_provider() -> Result<Option<LlmProvider>> {
     match idx {
         0 => Ok(Some(LlmProvider::OpenAI)),
         1 => Ok(Some(LlmProvider::Anthropic)),
-        2 => Ok(Some(LlmProvider::VertexAI)),
-        3 => Ok(Some(LlmProvider::AzureOpenAI)),
-        4 => Ok(Some(LlmProvider::Bedrock)),
-        5 => {
+        2 => Ok(Some(LlmProvider::GeminiAPI)),
+        3 => Ok(Some(LlmProvider::VertexAI)),
+        4 => Ok(Some(LlmProvider::AzureOpenAI)),
+        5 => Ok(Some(LlmProvider::Bedrock)),
+        6 => {
             let provider: String = Input::new()
                 .with_prompt("litellm provider name (e.g., groq, together_ai)")
                 .interact_text()?;
@@ -1919,7 +1923,7 @@ fn prompt_llm_provider() -> Result<Option<LlmProvider>> {
                 env_vars,
             })))
         }
-        6 => Ok(None), // Go back
+        7 => Ok(None), // Go back
         _ => unreachable!(),
     }
 }
@@ -1932,6 +1936,7 @@ fn prompt_embedding_provider() -> Result<Option<EmbeddingProvider>> {
     // Provider defaults: (provider_name, default_model, default_dims)
     let provider_defaults: Vec<(&str, &str, u32)> = vec![
         ("openai", "text-embedding-3-large", 3072),
+        ("gemini", "text-embedding-004", 768),
         ("vertex_ai", "text-embedding-005", 768),
         ("azure", "text-embedding-3-large", 3072),
         ("bedrock", "amazon.titan-embed-text-v2", 1024),
@@ -1939,10 +1944,11 @@ fn prompt_embedding_provider() -> Result<Option<EmbeddingProvider>> {
 
     let options = vec![
         "1. OpenAI (text-embedding-3-large, 3072 dims)",
-        "2. Vertex AI (text-embedding-005, 768 dims)",
-        "3. Azure OpenAI (text-embedding-3-large, 3072 dims)",
-        "4. AWS Bedrock (titan-embed-text-v2, 1024 dims)",
-        "5. Other (custom provider)",
+        "2. Gemini API (text-embedding-004, 768 dims) - API key",
+        "3. Vertex AI (text-embedding-005, 768 dims) - GCP service account",
+        "4. Azure OpenAI (text-embedding-3-large, 3072 dims)",
+        "5. AWS Bedrock (titan-embed-text-v2, 1024 dims)",
+        "6. Other (custom provider)",
         "← Go back",
     ];
 
@@ -1953,12 +1959,12 @@ fn prompt_embedding_provider() -> Result<Option<EmbeddingProvider>> {
         .interact()?;
 
     // Handle go back
-    if idx == 5 {
+    if idx == 6 {
         return Ok(None);
     }
 
     // Handle "Other"
-    if idx == 4 {
+    if idx == 5 {
         let provider: String = Input::new()
             .with_prompt("litellm provider name")
             .interact_text()?;
@@ -2031,9 +2037,10 @@ fn prompt_embedding_provider() -> Result<Option<EmbeddingProvider>> {
     // Return standard provider with defaults
     match idx {
         0 => Ok(Some(EmbeddingProvider::OpenAI)),
-        1 => Ok(Some(EmbeddingProvider::VertexAI)),
-        2 => Ok(Some(EmbeddingProvider::AzureOpenAI)),
-        3 => Ok(Some(EmbeddingProvider::Bedrock)),
+        1 => Ok(Some(EmbeddingProvider::GeminiAPI)),
+        2 => Ok(Some(EmbeddingProvider::VertexAI)),
+        3 => Ok(Some(EmbeddingProvider::AzureOpenAI)),
+        4 => Ok(Some(EmbeddingProvider::Bedrock)),
         _ => unreachable!(),
     }
 }
