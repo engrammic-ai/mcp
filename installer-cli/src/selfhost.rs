@@ -2724,7 +2724,7 @@ pub fn inject_tei_reranker_service(compose: &str) -> String {
     deploy:
       resources:
         limits:
-          memory: 10G
+          memory: 20G
     restart: unless-stopped
 "#;
 
