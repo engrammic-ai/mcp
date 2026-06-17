@@ -2705,7 +2705,7 @@ fn generate_compose(config: &SelfHostConfig) -> String {
 }
 
 /// Inject tei-reranker service and volume into compose for Cloud tier with LocalTei.
-fn inject_tei_reranker_service(compose: &str) -> String {
+pub fn inject_tei_reranker_service(compose: &str) -> String {
     const TEI_RERANKER_SERVICE: &str = r#"
   tei-reranker:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest

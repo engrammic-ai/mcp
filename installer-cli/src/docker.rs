@@ -115,18 +115,32 @@ pub fn check_compose_updates(dir: &Path) -> Result<Option<Vec<String>>> {
     }
 }
 
-/// Refresh compose file with latest template, preserving .env.
+/// Refresh compose file with latest template, preserving .env and re-applying customizations.
 pub fn refresh_compose(dir: &Path) -> Result<()> {
     let compose_path = dir.join("docker-compose.yml");
     let backup_path = dir.join("docker-compose.yml.bak");
+    let env_path = dir.join(".env");
 
     // Backup existing
     if compose_path.exists() {
         fs::copy(&compose_path, &backup_path)?;
     }
 
-    // Write new template
-    fs::write(&compose_path, COMPOSE_TEMPLATE)?;
+    // Start with base template
+    let mut compose = COMPOSE_TEMPLATE.to_string();
+
+    // Check .env for TEI reranker configuration
+    if env_path.exists() {
+        let env_content = fs::read_to_string(&env_path).unwrap_or_default();
+
+        // If TEI_RERANKER_URL is set to localhost:8082, inject TEI service
+        if env_content.contains("TEI_RERANKER_URL=http://localhost:8082") {
+            compose = crate::selfhost::inject_tei_reranker_service(&compose);
+        }
+    }
+
+    // Write updated compose
+    fs::write(&compose_path, compose)?;
 
     Ok(())
 }
