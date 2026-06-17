@@ -178,7 +178,8 @@ impl EmbeddingProvider {
 /// Reranker provider selection for Cloud tier.
 #[derive(Debug, Clone)]
 pub enum RerankerProvider {
-    LocalTei,  // Bundled TEI reranker (bge-reranker-v2-m3)
+    LocalTeiMiniLM,  // Ultra-light: ms-marco-MiniLM-L6-v2 (22MB, <500MB RAM)
+    LocalTeiJina,    // Better quality: jina-reranker-v2-base-multilingual (278M, 3-4GB RAM)
     None,
     Cohere,
     VertexAI,
@@ -188,7 +189,8 @@ pub enum RerankerProvider {
 impl RerankerProvider {
     pub fn provider_name(&self) -> Option<&str> {
         match self {
-            RerankerProvider::LocalTei => Some("tei"),
+            RerankerProvider::LocalTeiMiniLM => Some("tei"),
+            RerankerProvider::LocalTeiJina => Some("tei"),
             RerankerProvider::None => Option::None,
             RerankerProvider::Cohere => Some("cohere"),
             RerankerProvider::VertexAI => Some("vertex_ai"),
@@ -198,7 +200,8 @@ impl RerankerProvider {
 
     pub fn model(&self) -> Option<&str> {
         match self {
-            RerankerProvider::LocalTei => Some("BAAI/bge-reranker-v2-m3"),
+            RerankerProvider::LocalTeiMiniLM => Some("cross-encoder/ms-marco-MiniLM-L6-v2"),
+            RerankerProvider::LocalTeiJina => Some("jinaai/jina-reranker-v2-base-multilingual"),
             RerankerProvider::None => Option::None,
             RerankerProvider::Cohere => Some("rerank-v3.5"),
             RerankerProvider::VertexAI => Some("semantic-ranker-default@latest"),
@@ -211,12 +214,22 @@ impl RerankerProvider {
     }
 
     pub fn is_local(&self) -> bool {
-        matches!(self, RerankerProvider::LocalTei)
+        matches!(self, RerankerProvider::LocalTeiMiniLM | RerankerProvider::LocalTeiJina)
+    }
+
+    /// Memory limit for local TEI container
+    pub fn memory_limit(&self) -> &str {
+        match self {
+            RerankerProvider::LocalTeiMiniLM => "1G",
+            RerankerProvider::LocalTeiJina => "6G",
+            _ => "1G",
+        }
     }
 
     pub fn required_credentials(&self) -> Vec<CredentialSpec> {
         match self {
-            RerankerProvider::LocalTei => vec![], // No credentials needed
+            RerankerProvider::LocalTeiMiniLM => vec![],
+            RerankerProvider::LocalTeiJina => vec![],
             RerankerProvider::None => vec![],
             RerankerProvider::Cohere => vec![CredentialSpec {
                 env_var: "COHERE_API_KEY",

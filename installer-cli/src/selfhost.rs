@@ -404,7 +404,8 @@ fn parse_embedding_provider(s: &str) -> Option<EmbeddingProvider> {
 /// Parse reranker provider from string ID (for state restoration).
 fn parse_reranker_provider(s: &str) -> Option<RerankerProvider> {
     match s {
-        "tei" | "local_tei" => Some(RerankerProvider::LocalTei),
+        "tei" | "local_tei" | "tei_minilm" => Some(RerankerProvider::LocalTeiMiniLM),
+        "tei_jina" => Some(RerankerProvider::LocalTeiJina),
         "cohere" => Some(RerankerProvider::Cohere),
         "vertex_ai" => Some(RerankerProvider::VertexAI),
         "none" => Some(RerankerProvider::None),
@@ -2015,10 +2016,11 @@ fn prompt_reranker_provider() -> Result<Option<RerankerProvider>> {
 
     let options = vec![
         "1. None (skip reranking - simpler, slightly lower recall)",
-        "2. Cohere API (rerank-v3.5 - recommended cloud option)",
-        "3. Local TEI (bge-reranker - requires ~20GB RAM)",
-        "4. Vertex AI API (semantic-ranker)",
-        "5. Other (custom provider)",
+        "2. Local TEI - MiniLM (ultra-light: 22MB, <1GB RAM)",
+        "3. Local TEI - Jina (better quality: 278M, 3-4GB RAM)",
+        "4. Cohere API (rerank-v3.5 - recommended cloud option)",
+        "5. Vertex AI API (semantic-ranker)",
+        "6. Other (custom provider)",
         "← Go back",
     ];
 
@@ -2030,10 +2032,11 @@ fn prompt_reranker_provider() -> Result<Option<RerankerProvider>> {
 
     match idx {
         0 => Ok(Some(RerankerProvider::None)),
-        1 => Ok(Some(RerankerProvider::Cohere)),
-        2 => Ok(Some(RerankerProvider::LocalTei)),
-        3 => Ok(Some(RerankerProvider::VertexAI)),
-        4 => {
+        1 => Ok(Some(RerankerProvider::LocalTeiMiniLM)),
+        2 => Ok(Some(RerankerProvider::LocalTeiJina)),
+        3 => Ok(Some(RerankerProvider::Cohere)),
+        4 => Ok(Some(RerankerProvider::VertexAI)),
+        5 => {
             let provider: String = Input::new()
                 .with_prompt("litellm provider name")
                 .interact_text()?;
@@ -2064,7 +2067,7 @@ fn prompt_reranker_provider() -> Result<Option<RerankerProvider>> {
                 env_vars,
             })))
         }
-        5 => Ok(None), // Go back
+        6 => Ok(None), // Go back
         _ => unreachable!(),
     }
 }
@@ -2676,10 +2679,13 @@ fn generate_compose(config: &SelfHostConfig) -> String {
             .replace("standalone-pro.env", ".env");
     }
 
-    // Add tei-reranker service for Cloud tier with LocalTei
+    // Add tei-reranker service for Cloud tier with local TEI reranker
     if let Some(ref providers) = config.providers {
         if providers.reranker.is_local() {
-            compose = inject_tei_reranker_service(&compose);
+            if let Some(model) = providers.reranker.model() {
+                let memory = providers.reranker.memory_limit();
+                compose = inject_tei_reranker_service_with_model(&compose, model, memory);
+            }
         }
     }
 
@@ -2705,8 +2711,10 @@ fn generate_compose(config: &SelfHostConfig) -> String {
 }
 
 /// Inject tei-reranker service and volume into compose for Cloud tier with LocalTei.
-pub fn inject_tei_reranker_service(compose: &str) -> String {
-    const TEI_RERANKER_SERVICE: &str = r#"
+/// model: HuggingFace model ID (e.g., "cross-encoder/ms-marco-MiniLM-L6-v2")
+/// memory: Docker memory limit (e.g., "1G", "6G")
+pub fn inject_tei_reranker_service_with_model(compose: &str, model: &str, memory: &str) -> String {
+    let tei_reranker_service = format!(r#"
   tei-reranker:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
     container_name: engrammic-tei-reranker
@@ -2714,25 +2722,25 @@ pub fn inject_tei_reranker_service(compose: &str) -> String {
       - "8082:8080"
     volumes:
       - tei-reranker-models:/data
-    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--port", "8080"]
+    command: ["--model-id", "{}", "--port", "8080"]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 300s
+      start_period: 120s
     deploy:
       resources:
         limits:
-          memory: 20G
+          memory: {}
     restart: unless-stopped
-"#;
+"#, model, memory);
 
     let mut result = compose.to_string();
 
     // Find the volumes: section and add the service before it
     if let Some(volumes_idx) = result.find("\nvolumes:") {
-        result.insert_str(volumes_idx, TEI_RERANKER_SERVICE);
+        result.insert_str(volumes_idx, &tei_reranker_service);
     }
 
     // Add the volume definition inside the volumes: section
@@ -2759,6 +2767,15 @@ pub fn inject_tei_reranker_service(compose: &str) -> String {
     }
 
     result
+}
+
+/// Backward-compatible wrapper using MiniLM (ultra-light default)
+pub fn inject_tei_reranker_service(compose: &str) -> String {
+    inject_tei_reranker_service_with_model(
+        compose,
+        "cross-encoder/ms-marco-MiniLM-L6-v2",
+        "1G",
+    )
 }
 
 /// Add `:Z` SELinux label to named volume mounts in a compose string.
