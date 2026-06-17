@@ -1344,71 +1344,34 @@ fn check_disk_space(path: &Path, tier: Tier) -> Result<()> {
 fn prompt_tier() -> Result<Tier> {
     let ram = get_available_memory_gb();
 
-    // Recommend tier based on available RAM
-    let recommended = if ram >= 48.0 {
-        0 // Pro
-    } else if ram >= 24.0 {
-        1 // Standard
-    } else if ram >= 8.0 {
-        2 // Lite
-    } else {
-        3 // Cloud
-    };
-
     println!("  Your system: {:.1} GB RAM detected", ram);
     println!();
 
+    // Standalone tiers temporarily disabled
     let tiers = vec![
-        format!(
-            "Pro      (48GB+) - gemma4:26b + jina-reranker{}",
-            if recommended == 0 {
-                " (Recommended)"
-            } else {
-                ""
-            }
-        ),
-        format!(
-            "Standard (24GB)  - gemma3:12b + bge-reranker{}",
-            if recommended == 1 {
-                " (Recommended)"
-            } else {
-                ""
-            }
-        ),
-        format!(
-            "Lite     (8GB)   - phi4-mini, no reranker{}",
-            if recommended == 2 {
-                " (Recommended)"
-            } else {
-                ""
-            }
-        ),
-        format!(
-            "Cloud    (any)   - use cloud APIs{}",
-            if recommended == 3 {
-                " (Recommended)"
-            } else {
-                ""
-            }
-        ),
+        "Cloud (Recommended) - use cloud APIs (OpenAI, Anthropic, Gemini, etc.)".to_string(),
+        "Pro      (48GB+) - coming soon".dimmed().to_string(),
+        "Standard (24GB)  - coming soon".dimmed().to_string(),
+        "Lite     (8GB)   - coming soon".dimmed().to_string(),
     ];
 
-    println!(
-        "  {}",
-        "(Standalone tiers run models locally with Ollama + TEI)".dimmed()
-    );
     let idx = Select::new()
-        .with_prompt("Select tier based on available RAM")
+        .with_prompt("Select deployment tier")
         .items(&tiers)
-        .default(recommended)
+        .default(0)
         .interact()?;
 
-    let tier = match idx {
-        0 => Tier::Pro,
-        1 => Tier::Standard,
-        2 => Tier::Lite,
-        _ => Tier::Cloud,
-    };
+    // Only Cloud is enabled for now
+    if idx != 0 {
+        println!();
+        println!(
+            "  {} Standalone tiers are coming soon. Please select Cloud for now.",
+            "!".yellow()
+        );
+        return prompt_tier(); // Recurse to re-prompt
+    }
+
+    let tier = Tier::Cloud;
 
     println!(
         "  {} Selected: {:?} ({})",
