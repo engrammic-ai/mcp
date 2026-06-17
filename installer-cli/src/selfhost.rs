@@ -3254,14 +3254,47 @@ fn wait_for_healthy(config: &SelfHostConfig) -> Result<()> {
 
 fn configure_editors(config: &SelfHostConfig) -> Result<()> {
     use crate::tools::InstallMethod;
+    use dialoguer::MultiSelect;
 
     println!();
-    println!("{}", "Configuring editors".bold());
+    println!("{}", "Configure AI Agent Harnesses".bold());
     println!();
 
+    let all_tools = Tool::all();
     let detected = Tool::detect_installed();
-    if detected.is_empty() {
-        println!("  {} No supported editors detected", "-".dimmed());
+    let detected_ids: std::collections::HashSet<_> = detected.iter().map(|t| t.id).collect();
+
+    // Build options with detection status
+    let options: Vec<String> = all_tools
+        .iter()
+        .map(|t| {
+            if detected_ids.contains(t.id) {
+                format!("{} (detected)", t.name)
+            } else {
+                t.name.to_string()
+            }
+        })
+        .collect();
+
+    // Pre-select detected harnesses
+    let defaults: Vec<bool> = all_tools
+        .iter()
+        .map(|t| detected_ids.contains(t.id))
+        .collect();
+
+    println!(
+        "  {}",
+        "(↑↓ move · space toggle · enter confirm)".dimmed()
+    );
+    let selection = MultiSelect::new()
+        .with_prompt("Select harnesses to configure")
+        .items(&options)
+        .defaults(&defaults)
+        .interact()?;
+
+    if selection.is_empty() {
+        println!();
+        println!("  {} No harnesses selected", "-".dimmed());
         println!(
             "  Add this to your MCP config: {}",
             format!(
@@ -3273,9 +3306,17 @@ fn configure_editors(config: &SelfHostConfig) -> Result<()> {
         return Ok(());
     }
 
+    let selected_tools: Vec<&Tool> = selection
+        .iter()
+        .map(|&i| &all_tools[i])
+        .collect();
+
+    println!();
+    println!("{}", "Configuring selected harnesses".bold());
+
     let endpoint = format!("http://localhost:{}/mcp", config.port);
 
-    for tool in &detected {
+    for tool in selected_tools {
         match &tool.method {
             InstallMethod::FileEdit(shape) => {
                 let backup = crate::config::ensure_backup(&tool.config_path).unwrap_or(None);
