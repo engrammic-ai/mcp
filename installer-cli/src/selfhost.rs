@@ -2014,9 +2014,9 @@ fn prompt_reranker_provider() -> Result<Option<RerankerProvider>> {
     use dialoguer::Password;
 
     let options = vec![
-        "1. Local TEI (bge-reranker, bundled - no API cost)",
-        "2. None (disable reranking - faster but lower quality)",
-        "3. Cohere API (rerank-v3.5)",
+        "1. None (skip reranking - simpler, slightly lower recall)",
+        "2. Cohere API (rerank-v3.5 - recommended cloud option)",
+        "3. Local TEI (bge-reranker - requires ~20GB RAM)",
         "4. Vertex AI API (semantic-ranker)",
         "5. Other (custom provider)",
         "← Go back",
@@ -2029,9 +2029,9 @@ fn prompt_reranker_provider() -> Result<Option<RerankerProvider>> {
         .interact()?;
 
     match idx {
-        0 => Ok(Some(RerankerProvider::LocalTei)),
-        1 => Ok(Some(RerankerProvider::None)),
-        2 => Ok(Some(RerankerProvider::Cohere)),
+        0 => Ok(Some(RerankerProvider::None)),
+        1 => Ok(Some(RerankerProvider::Cohere)),
+        2 => Ok(Some(RerankerProvider::LocalTei)),
         3 => Ok(Some(RerankerProvider::VertexAI)),
         4 => {
             let provider: String = Input::new()
