@@ -7,12 +7,12 @@ services:
   app:
     image: europe-north1-docker.pkg.dev/engrammic/releases/engrammic-api:latest
     container_name: engrammic-app
-    ports:
-      - "8000:8000"
+    # Host networking allows access to GCE metadata service for Vertex AI auth
+    network_mode: host
     env_file:
       - .env
     volumes:
-      # Mount gcloud credentials for Vertex AI (optional)
+      # Mount gcloud credentials for Vertex AI (optional, for non-GCE environments)
       - ~/.config/gcloud:/mnt/gcloud:ro
       # Host-editable config overrides (e.g. models.yaml to switch the SAGE LLM).
       # Files dropped here win over the defaults baked into the image.
@@ -20,34 +20,25 @@ services:
     environment:
       - ENVIRONMENT=self-hosted
       - ENGRAMMIC_CONFIG_DIR=/app/config-override
-      - MEMGRAPH_HOST=memgraph
-      - QDRANT_HOST=qdrant
-      - REDIS_HOST=redis
-      - POSTGRES_HOST=postgres
+      # With network_mode: host, use localhost to reach other services
+      - MEMGRAPH_HOST=localhost
+      - QDRANT_HOST=localhost
+      - REDIS_HOST=localhost
+      - POSTGRES_HOST=localhost
       - POSTGRES_USER=engrammic
       - POSTGRES_DATABASE=engrammic
-      # GOOGLE_APPLICATION_CREDENTIALS is intentionally NOT set here.
-      # This allows ADC to fall through to GCE metadata on cloud VMs.
       # LiteLLM Vertex AI env vars (mapped from .env)
       - VERTEXAI_PROJECT=${VERTEX_PROJECT:-}
       - VERTEXAI_LOCATION=${VERTEX_LOCATION:-}
       # Migrations run automatically on startup. Set to false to disable:
       # - RUN_MIGRATIONS=false
-    depends_on:
-      memgraph:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
+    # Note: depends_on doesn't work with network_mode: host, services start in parallel
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
-      start_period: 60s
-      retries: 3
+      start_period: 90s
+      retries: 5
     deploy:
       resources:
         limits:
@@ -58,30 +49,24 @@ services:
     image: europe-north1-docker.pkg.dev/engrammic/releases/engrammic-api:latest
     container_name: engrammic-reaction-worker
     command: ["taskiq", "worker", "context_service.reactions.worker_entrypoint:broker", "--workers", "1"]
+    # Host networking allows access to GCE metadata service for Vertex AI auth
+    network_mode: host
     env_file:
       - .env
     volumes:
-      # Mount gcloud credentials for Vertex AI (optional)
       - ~/.config/gcloud:/mnt/gcloud:ro
       - ./config:/app/config-override:ro
     environment:
       - ENVIRONMENT=self-hosted
       - ENGRAMMIC_CONFIG_DIR=/app/config-override
-      - MEMGRAPH_HOST=memgraph
-      - QDRANT_HOST=qdrant
-      - REDIS_HOST=redis
-      - POSTGRES_HOST=postgres
+      - MEMGRAPH_HOST=localhost
+      - QDRANT_HOST=localhost
+      - REDIS_HOST=localhost
+      - POSTGRES_HOST=localhost
       - POSTGRES_USER=engrammic
       - POSTGRES_DATABASE=engrammic
-      # GOOGLE_APPLICATION_CREDENTIALS is intentionally NOT set here.
-      # This allows ADC to fall through to GCE metadata on cloud VMs.
       - VERTEXAI_PROJECT=${VERTEX_PROJECT:-}
       - VERTEXAI_LOCATION=${VERTEX_LOCATION:-}
-    depends_on:
-      redis:
-        condition: service_healthy
-      app:
-        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -197,6 +182,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: engrammic-redis
+    ports:
+      - "6379:6379"
     volumes:
       - redis-data:/data
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "100mb"]
@@ -214,6 +201,8 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: engrammic-postgres
+    ports:
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     environment:
