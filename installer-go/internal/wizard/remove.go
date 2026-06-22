@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/huh"
+
 	"github.com/anthropics/engrammic/installer/internal/core"
-	"github.com/anthropics/engrammic/installer/internal/platform"
 	"github.com/anthropics/engrammic/installer/internal/ui"
 )
 
@@ -40,8 +41,7 @@ func stepRemoveSelect(w *Wizard) StepResult {
 	}
 
 	// Build option list based on what is actually installed.
-	var options []string
-	var keys []string // parallel slice of mode identifiers
+	var options []huh.Option[string]
 
 	if hasEditors {
 		var editorNames []string
@@ -54,34 +54,33 @@ func stepRemoveSelect(w *Wizard) StepResult {
 			}
 		}
 		label := fmt.Sprintf("Editor configs (%s)", strings.Join(editorNames, ", "))
-		options = append(options, label)
-		keys = append(keys, "editors")
+		options = append(options, huh.NewOption(label, "editors"))
 	}
 
 	if hasServer {
-		options = append(options, "Selfhost server (docker containers + data)")
-		keys = append(keys, "server")
+		options = append(options, huh.NewOption("Selfhost server (docker containers + data)", "server"))
 	}
 
-	options = append(options, "Everything")
-	keys = append(keys, "everything")
+	options = append(options, huh.NewOption("Everything", "everything"))
 
 	fmt.Println()
 	ui.Title(w.StepHeader())
 	fmt.Println()
 
-	idx := ui.PlainSelect("What do you want to remove?", options, 0)
-	if idx < 0 || idx >= len(keys) {
+	var mode string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("What do you want to remove?").
+				Options(options...).
+				Value(&mode),
+		),
+	)
+	if err := form.Run(); err != nil {
 		return StepQuit
 	}
 
-	w.Mode = keys[idx]
-
-	// Warn about plain-UI non-interactive path when --yes is not set.
-	if !platform.UseRichUI() {
-		// Already in plain mode; PlainSelect already handled input.
-	}
-
+	w.Mode = mode
 	return StepNext
 }
 
@@ -124,16 +123,27 @@ func stepRemoveConfirm(w *Wizard) StepResult {
 
 	fmt.Println()
 
-	idx := ui.PlainSelect(
-		"What would you like to do?",
-		[]string{"Remove now", "Go back", "Cancel"},
-		0,
+	var action string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("What would you like to do?").
+				Options(
+					huh.NewOption("Remove now", "remove"),
+					huh.NewOption("Go back", "back"),
+					huh.NewOption("Cancel", "cancel"),
+				).
+				Value(&action),
+		),
 	)
+	if err := form.Run(); err != nil {
+		return StepQuit
+	}
 
-	switch idx {
-	case 0:
+	switch action {
+	case "remove":
 		return StepNext
-	case 1:
+	case "back":
 		return StepBack
 	default:
 		return StepQuit
