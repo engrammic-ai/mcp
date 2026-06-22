@@ -24,6 +24,28 @@ type ExecuteResult struct {
 	Detail  string
 }
 
+// executeSingleConfig handles a single harness install without progress display.
+func executeSingleConfig(choice HarnessChoice, endpoint string) ExecuteResult {
+	result := ExecuteResult{
+		Harness: choice.Harness,
+		Method:  choice.Method,
+	}
+
+	switch choice.Method {
+	case "file":
+		result.Error = writeFileConfig(choice.Harness, endpoint)
+		result.Detail = "configured"
+	case "deeplink":
+		result.Error = openDeeplink(choice.Harness, endpoint)
+		result.Detail = "opened"
+	case "manual":
+		result.Detail = "skipped (manual)"
+	}
+
+	result.Success = result.Error == nil
+	return result
+}
+
 // ExecuteConfigs iterates through harness choices, writes configs or opens
 // deeplinks, and updates a ProgressList in real time.
 func ExecuteConfigs(choices []HarnessChoice, endpoint string, progress *ui.ProgressList) []ExecuteResult {

@@ -2,6 +2,8 @@ package wizard
 
 import (
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/charmbracelet/huh"
 
@@ -54,6 +56,17 @@ func stepEditors(w *Wizard) StepResult {
 	}
 
 	if len(w.Harnesses) == 0 {
+		// Load existing state to know what's already configured
+		state, _ := core.LoadState()
+		configuredIDs := make(map[string]bool)
+		hasExistingConfig := false
+		if state != nil && len(state.Harnesses) > 0 {
+			hasExistingConfig = true
+			for id := range state.Harnesses {
+				configuredIDs[id] = true
+			}
+		}
+
 		detected := platform.DetectEditors()
 		detectedIDs := make(map[string]bool, len(detected))
 		for _, h := range detected {
@@ -67,17 +80,38 @@ func stepEditors(w *Wizard) StepResult {
 			if h.Method == core.InstallMethodPrintInstructions {
 				continue
 			}
+			// If we have existing config, only pre-select those
+			// Otherwise (fresh install), pre-select detected editors
+			var preSelect bool
+			if hasExistingConfig {
+				preSelect = configuredIDs[h.ID]
+			} else {
+				preSelect = detectedIDs[h.ID]
+			}
 			w.Harnesses = append(w.Harnesses, HarnessChoice{
 				Harness:  h,
 				Method:   DefaultMethod(h),
-				Selected: detectedIDs[h.ID],
+				Selected: preSelect,
 			})
+		}
+	}
+
+	// Load state again to show which are configured
+	state, _ := core.LoadState()
+	configuredIDs := make(map[string]bool)
+	if state != nil {
+		for id := range state.Harnesses {
+			configuredIDs[id] = true
 		}
 	}
 
 	options := make([]huh.Option[string], len(w.Harnesses))
 	for i, hc := range w.Harnesses {
-		options[i] = huh.NewOption(hc.Harness.Name, hc.Harness.ID)
+		label := hc.Harness.Name
+		if configuredIDs[hc.Harness.ID] {
+			label += " (configured)"
+		}
+		options[i] = huh.NewOption(label, hc.Harness.ID)
 	}
 
 	var selected []string
@@ -245,49 +279,74 @@ func stepReview(w *Wizard) StepResult {
 
 func stepExecute(w *Wizard) StepResult {
 	selected := w.SelectedHarnesses()
-	if len(selected) == 0 {
-		ui.Warn("No editors selected")
-		return StepBack
+
+	// Load current state to find what needs to be removed
+	state, _ := core.LoadState()
+	configuredIDs := make(map[string]bool)
+	if state != nil {
+		for id := range state.Harnesses {
+			configuredIDs[id] = true
+		}
 	}
 
-	names := make([]string, 0, len(selected))
+	// Build set of selected IDs
+	selectedIDs := make(map[string]bool)
 	for _, hc := range selected {
-		names = append(names, hc.Harness.Name)
+		selectedIDs[hc.Harness.ID] = true
 	}
-	skillsSelected := w.SelectedSkills()
-	if len(skillsSelected) > 0 {
-		names = append(names, "Skills")
-	}
-
-	progress := ui.NewProgressList(names)
 
 	fmt.Println()
-	ui.Title("Installing...")
-	fmt.Println(progress.Render())
+	ui.Title("Configuring...")
 
-	lineCount := len(names) + 1
-	stop := progress.StartTicker(func() {
-		fmt.Printf("\033[%dA", lineCount)
-		fmt.Println(progress.Render())
-	})
-
-	results := ExecuteConfigs(selected, w.Endpoint, progress)
-
-	if len(skillsSelected) > 0 {
-		progress.SetStatus("Skills", ui.StatusDone, "installed")
+	// Remove engrammic from deselected harnesses that were previously configured
+	for _, hc := range w.Harnesses {
+		if !hc.Selected && configuredIDs[hc.Harness.ID] {
+			if err := removeConfig(hc.Harness); err != nil {
+				ui.Warn("%-22s could not remove: %v", hc.Harness.Name, err)
+			} else {
+				ui.Info("%-22s removed", hc.Harness.Name)
+			}
+		}
 	}
 
-	stop()
+	// Configure selected editors
+	for _, hc := range selected {
+		result := executeSingleConfig(hc, w.Endpoint)
+		if result.Error != nil {
+			ui.Error("%-22s %v", hc.Harness.Name, result.Error)
+		} else {
+			ui.Success("%-22s %s", hc.Harness.Name, result.Detail)
+		}
+	}
 
-	fmt.Printf("\033[%dA", lineCount)
-	fmt.Println(progress.Render())
+	// Skills (placeholder - actual writing not implemented yet)
+	skillsSelected := w.SelectedSkills()
+	if len(skillsSelected) > 0 {
+		ui.Success("%-22s installed", "Skills")
+	}
 
-	if err := UpdateState(w, results); err != nil {
+	// Update state - only include selected harnesses
+	newState := &core.State{
+		Version:     1,
+		LastUpdated: time.Now(),
+		Harnesses:   make(map[string]core.HarnessState),
+	}
+	if state != nil && state.Server != nil {
+		newState.Server = state.Server
+	}
+	for _, hc := range selected {
+		newState.Harnesses[hc.Harness.ID] = core.HarnessState{
+			InstalledAt: time.Now(),
+			ConfigPath:  platform.ExpandPath(hc.Harness.ConfigPath),
+			Endpoint:    w.Endpoint,
+		}
+	}
+	if err := newState.Save(); err != nil {
 		ui.Warn("Could not save state: %v", err)
 	}
 
 	fmt.Println()
-	ui.Success("Done! Your editors are now connected to Engrammic.")
+	ui.Success("Done!")
 
 	return StepNext
 }
@@ -335,4 +394,27 @@ func isAbsPath(p string) bool {
 		return true
 	}
 	return false
+}
+
+// removeConfig removes the engrammic entry from a harness config file.
+func removeConfig(h core.Harness) error {
+	if h.Shape == nil {
+		return nil // Nothing to remove for non-file harnesses
+	}
+
+	configPath := platform.ExpandPath(h.ConfigPath)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Config doesn't exist, nothing to remove
+		}
+		return err
+	}
+
+	updated, err := core.RemoveServerConfig(data, *h.Shape, "engrammic")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, updated, 0644)
 }
