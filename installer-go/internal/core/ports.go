@@ -49,7 +49,7 @@ func WhoIsUsingPort(port int) string {
 }
 
 func whoIsUsingPortLinux(port int) string {
-	out, err := exec.Command("ss", "-tlnp", fmt.Sprintf("sport = :%d", port)).Output()
+	out, err := exec.Command("ss", "-tlnp", "sport", "=", fmt.Sprintf(":%d", port)).Output()
 	if err == nil {
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		// skip header line

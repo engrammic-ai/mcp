@@ -15,10 +15,11 @@ import (
 const stateVersion = 1
 
 type State struct {
-	Version     int                     `json:"version"`
-	LastUpdated time.Time               `json:"last_updated"`
-	Server      *ServerState            `json:"server,omitempty"`
-	Harnesses   map[string]HarnessState `json:"harnesses"`
+	Version       int                     `json:"version"`
+	ConfigVersion int                     `json:"config_version"`
+	LastUpdated   time.Time               `json:"last_updated"`
+	Server        *ServerState            `json:"server,omitempty"`
+	Harnesses     map[string]HarnessState `json:"harnesses"`
 }
 
 type ServerState struct {
