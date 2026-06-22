@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/engrammic/installer/internal/core"
 	"github.com/anthropics/engrammic/installer/internal/platform"
 	"github.com/anthropics/engrammic/installer/internal/ui"
+	"github.com/charmbracelet/huh"
 )
 
 // SelfhostWizard returns a Wizard wired with all selfhost steps.
@@ -56,12 +57,23 @@ func stepRuntime(w *Wizard) StepResult {
 	// Both available — ask the user.
 	fmt.Println()
 	ui.Title(w.StepHeader())
-	idx := ui.PlainSelect("Select container runtime:", []string{"Docker", "Podman"}, 0)
-	if idx == 0 {
-		w.Runtime = "docker"
-	} else {
-		w.Runtime = "podman"
+
+	var runtime string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select container runtime:").
+				Options(
+					huh.NewOption("Docker", "docker"),
+					huh.NewOption("Podman", "podman"),
+				).
+				Value(&runtime),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return StepQuit
 	}
+	w.Runtime = runtime
 	return StepNext
 }
 
@@ -72,20 +84,23 @@ func stepRuntime(w *Wizard) StepResult {
 func stepTier(w *Wizard) StepResult {
 	fmt.Println()
 	ui.Title(w.StepHeader())
-	idx := ui.PlainSelect(
-		"Select deployment tier:",
-		[]string{
-			"Standalone — run local models (16 GB+ RAM required)",
-			"Cloud Providers — use your own API keys",
-		},
-		1,
+
+	var tier string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select deployment tier:").
+				Options(
+					huh.NewOption("Standalone — run local models (16 GB+ RAM required)", "standalone"),
+					huh.NewOption("Cloud Providers — use your own API keys", "cloud"),
+				).
+				Value(&tier),
+		),
 	)
-	switch idx {
-	case 0:
-		w.Tier = "standalone"
-	default:
-		w.Tier = "cloud"
+	if err := form.Run(); err != nil {
+		return StepQuit
 	}
+	w.Tier = tier
 	return StepNext
 }
 
@@ -113,14 +128,6 @@ func stepProviders(w *Wizard) StepResult {
 	ui.Title(w.StepHeader())
 
 	// LLM Provider
-	llmNames := []string{
-		"OpenAI (gpt-4o)",
-		"Anthropic (claude-sonnet)",
-		"Google Gemini",
-		"Vertex AI",
-		"Azure OpenAI",
-		"AWS Bedrock",
-	}
 	llmKinds := []core.LlmProvider{
 		core.LlmOpenAI,
 		core.LlmAnthropic,
@@ -129,17 +136,30 @@ func stepProviders(w *Wizard) StepResult {
 		core.LlmAzureOpenAI,
 		core.LlmBedrock,
 	}
-	llmIdx := ui.PlainSelect("Select LLM provider:", llmNames, 0)
+	var llmChoice string
+	llmForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select LLM provider:").
+				Options(
+					huh.NewOption("OpenAI (gpt-4o)", "0"),
+					huh.NewOption("Anthropic (claude-sonnet)", "1"),
+					huh.NewOption("Google Gemini", "2"),
+					huh.NewOption("Vertex AI", "3"),
+					huh.NewOption("Azure OpenAI", "4"),
+					huh.NewOption("AWS Bedrock", "5"),
+				).
+				Value(&llmChoice),
+		),
+	)
+	if err := llmForm.Run(); err != nil {
+		return StepQuit
+	}
+	var llmIdx int
+	fmt.Sscanf(llmChoice, "%d", &llmIdx)
 	w.LLMProvider = core.NewLlmProvider(llmKinds[llmIdx])
 
 	// Embedding Provider
-	embedNames := []string{
-		"OpenAI (text-embedding-3-large)",
-		"Google Gemini",
-		"Vertex AI",
-		"Azure OpenAI",
-		"AWS Bedrock",
-	}
 	embedKinds := []core.EmbeddingProvider{
 		core.EmbOpenAI,
 		core.EmbGeminiAPI,
@@ -147,17 +167,29 @@ func stepProviders(w *Wizard) StepResult {
 		core.EmbAzureOpenAI,
 		core.EmbBedrock,
 	}
-	embedIdx := ui.PlainSelect("Select embedding provider:", embedNames, 0)
+	var embedChoice string
+	embedForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select embedding provider:").
+				Options(
+					huh.NewOption("OpenAI (text-embedding-3-large)", "0"),
+					huh.NewOption("Google Gemini", "1"),
+					huh.NewOption("Vertex AI", "2"),
+					huh.NewOption("Azure OpenAI", "3"),
+					huh.NewOption("AWS Bedrock", "4"),
+				).
+				Value(&embedChoice),
+		),
+	)
+	if err := embedForm.Run(); err != nil {
+		return StepQuit
+	}
+	var embedIdx int
+	fmt.Sscanf(embedChoice, "%d", &embedIdx)
 	w.EmbedProvider = core.NewEmbeddingProvider(embedKinds[embedIdx])
 
 	// Reranker
-	rerankerNames := []string{
-		"None",
-		"Local TEI — MiniLM-L6 (1 GB RAM)",
-		"Local TEI — Jina v2 (6 GB RAM)",
-		"Cohere",
-		"Vertex AI",
-	}
 	rerankerKinds := []core.RerankerProvider{
 		core.RerankerNone,
 		core.RerankerLocalTeiMiniLM,
@@ -165,7 +197,26 @@ func stepProviders(w *Wizard) StepResult {
 		core.RerankerCohere,
 		core.RerankerVertexAI,
 	}
-	rerankerIdx := ui.PlainSelect("Select reranker (optional):", rerankerNames, 0)
+	var rerankerChoice string
+	rerankerForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select reranker (optional):").
+				Options(
+					huh.NewOption("None", "0"),
+					huh.NewOption("Local TEI — MiniLM-L6 (1 GB RAM)", "1"),
+					huh.NewOption("Local TEI — Jina v2 (6 GB RAM)", "2"),
+					huh.NewOption("Cohere", "3"),
+					huh.NewOption("Vertex AI", "4"),
+				).
+				Value(&rerankerChoice),
+		),
+	)
+	if err := rerankerForm.Run(); err != nil {
+		return StepQuit
+	}
+	var rerankerIdx int
+	fmt.Sscanf(rerankerChoice, "%d", &rerankerIdx)
 	w.Reranker = core.NewRerankerProvider(rerankerKinds[rerankerIdx])
 
 	return StepNext
@@ -204,7 +255,17 @@ func stepCredentials(w *Wizard) StepResult {
 		if cred.Secret {
 			prompt += " (hidden)"
 		}
-		val := ui.PlainInput(prompt, "")
+		var val string
+		inputField := huh.NewInput().
+			Title(prompt).
+			Value(&val)
+		if cred.Secret {
+			inputField = inputField.EchoMode(huh.EchoModePassword)
+		}
+		form := huh.NewForm(huh.NewGroup(inputField))
+		if err := form.Run(); err != nil {
+			return StepQuit
+		}
 		w.Credentials[cred.EnvVar] = val
 	}
 
@@ -218,7 +279,18 @@ func stepCredentials(w *Wizard) StepResult {
 func stepLicense(w *Wizard) StepResult {
 	fmt.Println()
 	ui.Title(w.StepHeader())
-	license := ui.PlainInput("License key (leave blank for 14-day trial)", "")
+
+	var license string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("License key (leave blank for 14-day trial)").
+				Value(&license),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return StepQuit
+	}
 	w.License = strings.TrimSpace(license)
 	return StepNext
 }
@@ -249,11 +321,33 @@ func stepConfig(w *Wizard) StepResult {
 	fmt.Printf("\n  Port:           %d (available)\n", w.Port)
 	fmt.Printf("  Data directory: %s/data\n\n", platform.UserConfigDir())
 
-	if ui.PlainConfirm("Use these defaults?", true) {
+	var useDefaults bool
+	confirmForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Use these defaults?").
+				Value(&useDefaults),
+		),
+	)
+	if err := confirmForm.Run(); err != nil {
+		return StepQuit
+	}
+	if useDefaults {
 		return StepNext
 	}
 
-	portStr := ui.PlainInput("Port", fmt.Sprintf("%d", w.Port))
+	var portStr string
+	inputForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Port").
+				Placeholder(fmt.Sprintf("%d", w.Port)).
+				Value(&portStr),
+		),
+	)
+	if err := inputForm.Run(); err != nil {
+		return StepQuit
+	}
 	var port int
 	if _, err := fmt.Sscanf(portStr, "%d", &port); err == nil && port > 0 {
 		if !core.IsPortAvailable(port) {
@@ -290,15 +384,26 @@ func stepSelfhostReview(w *Wizard) StepResult {
 	fmt.Printf("  Endpoint:   %s\n", w.Endpoint)
 	fmt.Println()
 
-	idx := ui.PlainSelect(
-		"What would you like to do?",
-		[]string{"Deploy now", "Go back", "Cancel"},
-		0,
+	var action string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("What would you like to do?").
+				Options(
+					huh.NewOption("Deploy now", "deploy"),
+					huh.NewOption("Go back", "back"),
+					huh.NewOption("Cancel", "cancel"),
+				).
+				Value(&action),
+		),
 	)
-	switch idx {
-	case 0:
+	if err := form.Run(); err != nil {
+		return StepQuit
+	}
+	switch action {
+	case "deploy":
 		return StepNext
-	case 1:
+	case "back":
 		return StepBack
 	default:
 		return StepQuit
