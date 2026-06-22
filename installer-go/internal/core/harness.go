@@ -169,7 +169,7 @@ func vsCodeUserConfigPath() string {
 	}
 }
 
-func dl(k DeepLinkKind) *DeepLinkKind {
+func deepLinkPtr(k DeepLinkKind) *DeepLinkKind {
 	return &k
 }
 
@@ -333,21 +333,21 @@ func AllHarnesses() []Harness {
 			ID:         "cursor",
 			ConfigPath: filepath.Join(home, ".cursor", "extensions"), // detection marker
 			Method:     InstallMethodDeepLink,
-			DeepLink:   dl(DeepLinkCursor),
+			DeepLink:   deepLinkPtr(DeepLinkCursor),
 		},
 		{
 			Name:       "VS Code (Copilot)",
 			ID:         "vscode",
 			ConfigPath: filepath.Join(home, ".vscode", "extensions"), // detection marker
 			Method:     InstallMethodDeepLink,
-			DeepLink:   dl(DeepLinkVSCode),
+			DeepLink:   deepLinkPtr(DeepLinkVSCode),
 		},
 		{
 			Name:       "Windsurf (deeplink)",
 			ID:         "windsurf-dl",
 			ConfigPath: filepath.Join(home, ".codeium", "windsurf"), // detection marker
 			Method:     InstallMethodDeepLink,
-			DeepLink:   dl(DeepLinkWindsurf),
+			DeepLink:   deepLinkPtr(DeepLinkWindsurf),
 		},
 		// --- PrintInstructions ---
 		{
@@ -371,8 +371,11 @@ func AllHarnesses() []Harness {
 func DetectInstalled() []Harness {
 	var out []Harness
 	for _, h := range AllHarnesses() {
-		parent := filepath.Dir(h.ConfigPath)
-		if info, err := os.Stat(parent); err == nil && info.IsDir() {
+		if !filepath.IsAbs(h.ConfigPath) {
+			continue
+		}
+		dir := filepath.Dir(h.ConfigPath)
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
 			out = append(out, h)
 		}
 	}
@@ -381,9 +384,10 @@ func DetectInstalled() []Harness {
 
 // FromID returns the harness with the given ID, or nil if not found.
 func FromID(id string) *Harness {
-	for _, h := range AllHarnesses() {
-		if h.ID == id {
-			return &h
+	all := AllHarnesses()
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i]
 		}
 	}
 	return nil

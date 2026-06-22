@@ -357,10 +357,9 @@ type ProviderSet struct {
 func (ps ProviderSet) RequiredCredentials() []CredentialSpec {
 	seen := make(map[string]bool)
 	var result []CredentialSpec
-	for _, cred := range append(append(
-		ps.LLM.RequiredCredentials(),
-		ps.Embedding.RequiredCredentials()...),
-		ps.Reranker.RequiredCredentials()...) {
+	all := append(ps.LLM.RequiredCredentials(), ps.Embedding.RequiredCredentials()...)
+	all = append(all, ps.Reranker.RequiredCredentials()...)
+	for _, cred := range all {
 		if !seen[cred.EnvVar] {
 			seen[cred.EnvVar] = true
 			result = append(result, cred)
