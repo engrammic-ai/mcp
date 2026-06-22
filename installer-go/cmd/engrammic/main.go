@@ -1,7 +1,14 @@
 package main
 
-import "fmt"
+import "github.com/anthropics/engrammic/installer/internal/cli"
+
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 func main() {
-	fmt.Println("engrammic installer - not yet implemented")
+	cli.SetVersion(version, commit, date)
+	cli.Execute()
 }
