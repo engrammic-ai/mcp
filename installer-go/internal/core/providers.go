@@ -34,13 +34,6 @@ const (
 	LlmOther
 )
 
-// llmOtherData holds the OtherProvider payload when LlmProvider == LlmOther.
-// Callers use NewLlmOther / LlmOtherData to work with it.
-type llmProviderConfig struct {
-	kind  LlmProvider
-	other *OtherProvider
-}
-
 // LlmProviderConfig wraps an LlmProvider variant together with optional Other data.
 type LlmProviderConfig struct {
 	Kind  LlmProvider
