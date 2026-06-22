@@ -1,7 +1,7 @@
 # Engrammic Go Installer CLI & Wizard Spec
 
 **Date:** 2026-06-22  
-**Status:** Approved  
+**Status:** Approved (v2 - expanded)  
 **Builds on:** 2026-06-21-installer-go-migration-design.md
 
 ## Overview
@@ -57,20 +57,67 @@ engrammic version            # Show version info
 | `--no-color` | Disable colors (auto-detected for dumb terminals) |
 | `--endpoint URL` | Override endpoint (cloud or selfhost) |
 | `--tool=X,Y` | Pre-select specific tools |
+| `--method=file\|deeplink` | Prefer file config or deeplink (for editors supporting both) |
 
 ## Wizard Behavior
 
 - **Always wizard** — runs full wizard every time, pre-fills detected values
 - **Linear with back** — Step 1 → 2 → 3 → Review → Execute, can go back anytime
 - **First question** — "Cloud or Self-hosted?" then completely separate flows
+- **Re-install behavior** — if already configured, shows current state with options: Update endpoint / Reconfigure / Skip
 
-## Cloud Install Wizard (4 steps)
+## Supported Harnesses (26 total)
+
+### Tier 1: Detected & Shown by Default
+| Harness | ID | Method | Config Path |
+|---------|-----|--------|-------------|
+| Claude Code | `claude` | File | `~/.claude/settings.json` |
+| Claude Desktop | `claude-desktop` | File | OS-specific |
+| Cursor | `cursor` | Deeplink | `cursor://...` |
+| Cursor (file) | `cursor-file` | File | `~/.cursor/mcp.json` |
+| VS Code | `vscode` | Deeplink | `vscode:mcp/install?...` |
+| VS Code (file) | `vscode-file` | File | `~/.config/Code/User/mcp.json` |
+| Windsurf | `windsurf` | File | `~/.codeium/windsurf/mcp_config.json` |
+| Windsurf | `windsurf-dl` | Deeplink | `windsurf://...` |
+| Gemini CLI | `gemini` | File | `~/.gemini/settings.json` |
+
+### Tier 2: Available (shown in "Show all")
+| Harness | ID | Method | Config Path |
+|---------|-----|--------|-------------|
+| Antigravity | `antigravity` | File | `~/.gemini/antigravity/mcp_config.json` |
+| Pi Agents | `pi` | File | `~/.pi/agent/mcp.json` |
+| GitHub Copilot CLI | `copilot` | File | `~/.copilot/mcp-config.json` |
+| OpenAI Codex CLI | `codex` | File (TOML) | `~/.codex/config.toml` |
+| Goose | `goose` | File (YAML) | `~/.config/goose/config.yaml` |
+| Sourcegraph Amp | `amp` | File | `~/.config/amp/settings.json` |
+| OpenCode | `opencode` | File | `~/.config/opencode/opencode.json` |
+| Amazon Q | `amazonq` | File | `~/.aws/amazonq/mcp.json` |
+| Zed | `zed` | File | `~/.config/zed/settings.json` |
+| Kiro | `kiro` | File | `~/.kiro/settings/mcp.json` |
+| JetBrains Junie CLI | `junie` | File | `~/.junie/mcp/mcp.json` |
+| OpenClaw | `openclaw` | File | `~/.openclaw/mcp.json` |
+| Hermes Agent | `hermes` | File (YAML) | `~/.hermes/config.yaml` |
+
+### Tier 3: Manual Configuration (PrintInstructions)
+| Harness | ID | Method | Instructions |
+|---------|-----|--------|--------------|
+| JetBrains AI Assistant | `jetbrains` | Manual | Settings > Tools > AI Assistant > MCP |
+| Trae | `trae` | Manual | In-app MCP panel |
+
+### Tier 4: Project-Level (require project context)
+| Harness | ID | Method | Config Path |
+|---------|-----|--------|-------------|
+| Continue.dev | `continue` | File (YAML) | `.continue/mcpServers/engrammic.yaml` |
+| Roo Code | `roo` | File | `.roo/mcp.json` |
+| Cline | `cline` | File | `.cline/mcp.json` |
+
+## Cloud Install Wizard (5 steps)
 
 ### Step 1: Deployment Mode
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Engrammic Installer                                  Step 1/4  │
+│  Engrammic Installer                                  Step 1/5  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  How do you want to connect to Engrammic?                       │
@@ -89,57 +136,159 @@ engrammic version            # Show version info
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Engrammic Installer                                  Step 2/4  │
+│  Engrammic Installer                                  Step 2/5  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  Select editors to configure:                                   │
 │                                                                 │
+│  Detected (3):                                                  │
 │  › [x] Claude Code           ~/.claude/settings.json            │
 │    [x] Windsurf              ~/.codeium/windsurf/mcp_config     │
-│    [ ] Cursor                ~/.cursor/ (not detected)          │
-│    [ ] VS Code               ~/.config/Code/User/mcp.json       │
-│    [ ] Gemini CLI            ~/.gemini/settings.json            │
+│    [x] Gemini CLI            ~/.gemini/settings.json            │
 │                                                                 │
-│  Detected editors are pre-selected.                             │
+│  ─────────────────────────────────────────────                  │
+│  Show all editors (20 more)...                                  │
 │                                                                 │
 │  ↑/↓ move  •  space toggle  •  enter next  •  esc back          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- Editors are configured via file edit (JSON/YAML/TOML depending on harness)
-- Deeplinks only used for web interfaces (Claude.ai web, etc.)
-- Detected editors are pre-selected
+**Expanded "Show all" view:**
+```
+│  All editors:                                                   │
+│                                                                 │
+│  › [x] Claude Code           (detected)                         │
+│    [x] Windsurf              (detected)                         │
+│    [x] Gemini CLI            (detected)                         │
+│    [ ] Claude Desktop                                           │
+│    [ ] Cursor                                                   │
+│    [ ] VS Code                                                  │
+│    [ ] Antigravity                                              │
+│    [ ] Pi Agents                                                │
+│    [ ] GitHub Copilot CLI                                       │
+│    [ ] OpenAI Codex CLI                                         │
+│    ... (scroll for more)                                        │
+│                                                                 │
+│  ─────────────────────────────────────────────                  │
+│  Manual setup required:                                         │
+│    [ ] JetBrains AI Assistant                                   │
+│    [ ] Trae                                                     │
+```
+
+### Step 2b: Install Method Choice (for dual-method editors)
+
+When user selects an editor that supports BOTH file config and deeplink (Cursor, VS Code, Windsurf):
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Engrammic Installer                                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  How do you want to configure Cursor?                           │
+│                                                                 │
+│  › Edit config file                                             │
+│      Write to ~/.cursor/mcp.json                                │
+│                                                                 │
+│    Open in editor (deeplink)                                    │
+│      Launches Cursor with install prompt                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+This sub-step appears once per dual-method editor selected.
+
+### Step 2c: Manual Configuration Flow (PrintInstructions)
+
+When user selects JetBrains AI Assistant or Trae:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  JetBrains AI Assistant - Manual Setup                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  This editor requires manual configuration:                     │
+│                                                                 │
+│  1. Open your JetBrains IDE                                     │
+│  2. Go to Settings > Tools > AI Assistant > MCP                 │
+│  3. Add a new server with URL:                                  │
+│     https://beta.engrammic.ai/mcp/                              │
+│                                                                 │
+│  › I've done this, continue                                     │
+│    Skip this editor                                             │
+│    Copy URL to clipboard                                        │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Step 3: Install Skills (Optional)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Engrammic Installer                                  Step 3/4  │
+│  Engrammic Installer                                  Step 3/5  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Install Engrammic skills? (optional)                           │
+│  Install Engrammic skills? (adds /engrammic-* commands)         │
 │                                                                 │
+│  User-level (global):                                           │
 │  › [x] Claude Code           ~/.claude/skills/                  │
-│    [ ] Cursor (project)      .cursor/rules/                     │
+│    [ ] Pi Agents             ~/.pi/agent/skills/                │
+│    [ ] Gemini CLI            ~/.gemini/GEMINI.md                │
+│    [ ] Codex CLI             ~/.codex/AGENTS.md                 │
+│    [ ] OpenClaw              ~/.openclaw/skills/                │
+│    [ ] Hermes                ~/.hermes/skills/                  │
 │                                                                 │
-│  Skills add slash commands like /engrammic-recall               │
+│  Project-level (current directory):                             │
+│    [ ] Cursor rules          .cursor/rules/                     │
+│    [ ] Windsurf              .windsurf/skills/                  │
+│    [ ] AGENTS.md             ./AGENTS.md                        │
+│    [ ] Cross-harness         .agents/skills/                    │
+│                                                                 │
+│  ↑/↓ move  •  space toggle  •  enter next  •  esc back          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Step 4: Project-Level Editors (Optional)
+
+If user is in a git repo or project directory:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Engrammic Installer                                  Step 4/5  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Configure project-level editors?                               │
+│                                                                 │
+│  These editors use per-project config files:                    │
+│                                                                 │
+│    [ ] Continue.dev          .continue/mcpServers/              │
+│    [ ] Roo Code              .roo/mcp.json                      │
+│    [ ] Cline                 .cline/mcp.json                    │
+│                                                                 │
+│  Project: /home/user/my-project                                 │
+│                                                                 │
+│  › Skip (configure later with: engrammic install --tool=X)      │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Step 4: Review & Execute
+### Step 5: Review & Execute
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Engrammic Installer                                  Step 4/4  │
+│  Engrammic Installer                                  Step 5/5  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  Ready to install:                                              │
 │                                                                 │
 │  Endpoint:  https://beta.engrammic.ai/mcp/                      │
 │                                                                 │
-│  Editors:   Claude Code, Windsurf                               │
-│  Skills:    Claude Code                                         │
+│  Editors:                                                       │
+│    Claude Code      file config                                 │
+│    Windsurf         file config                                 │
+│    Cursor           deeplink (will open editor)                 │
+│    JetBrains        manual setup                                │
+│                                                                 │
+│  Skills:            Claude Code, Cursor rules                   │
 │                                                                 │
 │  › Install now                                                  │
 │    Go back                                                      │
@@ -154,8 +303,31 @@ engrammic version            # Show version info
 │  Installing...                                                  │
 │                                                                 │
 │  ✓ Claude Code         configured                               │
-│  ⠋ Windsurf            writing config...                        │
+│  ✓ Windsurf            configured                               │
+│  ⠋ Cursor              opening deeplink...                      │
+│  ○ JetBrains           manual (skipped)                         │
 │  ○ Skills              waiting                                  │
+```
+
+### Re-Install Behavior
+
+When wizard detects existing configuration:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Engrammic Installer                                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Claude Code is already configured:                             │
+│                                                                 │
+│  Current endpoint: http://localhost:8000/mcp                    │
+│  Installed: 2026-06-20                                          │
+│                                                                 │
+│  › Update endpoint to https://beta.engrammic.ai/mcp/            │
+│    Keep current configuration                                   │
+│    Reconfigure from scratch                                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Selfhost Wizard (8 steps)
@@ -316,10 +488,13 @@ Same as cloud, select "Self-hosted"
 │  Configured Editors:                                            │
 │  ✓ Claude Code       ~/.claude/settings.json                    │
 │  ✓ Windsurf          ~/.codeium/windsurf/mcp_config.json        │
-│  ✗ Cursor            config missing (run: engrammic install)    │
+│  ✓ Cursor            via deeplink                               │
+│  ⚠ JetBrains         manual setup (unverified)                  │
+│  ✗ VS Code           not configured                             │
 │                                                                 │
 │  Skills:                                                        │
 │  ✓ Claude Code       ~/.claude/skills/engrammic-*               │
+│  ✓ Cursor rules      .cursor/rules/engrammic-*                  │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -347,7 +522,8 @@ Same as cloud, select "Self-hosted"
 │  Configs                                                        │
 │  ✓ Claude Code             valid JSON, endpoint matches         │
 │  ✓ Windsurf                valid JSON, endpoint matches         │
-│  ⚠ Cursor                  not configured                       │
+│  ⚠ Cursor                  deeplink (cannot verify)             │
+│  ⚠ JetBrains               manual setup (cannot verify)         │
 │                                                                 │
 │  2 warnings, 0 errors                                           │
 │                                                                 │
@@ -387,6 +563,9 @@ Same as cloud, select "Self-hosted"
 │  • Docker containers and data                                   │
 │  • ~/.engrammic/state.json                                      │
 │                                                                 │
+│  Cannot remove (manual setup):                                  │
+│  • JetBrains AI Assistant - remove manually in IDE settings     │
+│                                                                 │
 │  › Remove now                                                   │
 │    Go back                                                      │
 │    Cancel                                                       │
@@ -402,6 +581,19 @@ Same as cloud, select "Self-hosted"
 │  › [R]etry                                                      │
 │    [S]kip and continue                                          │
 │    [A]bort installation                                         │
+```
+
+### Deeplink Timeout
+
+```
+│  ⚠ Cursor              deeplink opened, waiting for confirm...  │
+│                                                                 │
+│  The editor should have opened with an install prompt.          │
+│  Did the installation succeed?                                  │
+│                                                                 │
+│  › Yes, continue                                                │
+│    No, try file config instead                                  │
+│    Skip this editor                                             │
 ```
 
 ### Missing Dependency
@@ -465,18 +657,24 @@ How do you want to connect?
   2. Self-hosted
 Choice [1]: 1
 
-Select editors to configure:
-  1. [x] Claude Code (detected)
-  2. [x] Windsurf (detected)
-  3. [ ] Cursor
-  4. [ ] VS Code
-Toggle (1-4), done (d), or all (a) [d]: d
+Detected editors:
+  1. [x] Claude Code
+  2. [x] Windsurf
+  3. [x] Gemini CLI
+
+Show all editors? [y/N]: n
+Toggle (1-3), done (d) [d]: d
+
+Cursor supports multiple install methods:
+  1. File config (~/.cursor/mcp.json)
+  2. Deeplink (opens editor)
+Choice [1]: 1
 
 Install skills? [Y/n]: y
 
 Ready to install:
   Endpoint: https://beta.engrammic.ai/mcp/
-  Editors: Claude Code, Windsurf
+  Editors: Claude Code, Windsurf, Gemini CLI
   Skills: Claude Code
 
 Proceed? [Y/n]: y
@@ -484,6 +682,7 @@ Proceed? [Y/n]: y
 Installing...
   [OK] Claude Code
   [OK] Windsurf
+  [OK] Gemini CLI
   [OK] Skills
 
 Done! Your editors are now connected to Engrammic.
@@ -493,15 +692,20 @@ Done! Your editors are now connected to Engrammic.
 
 ```bash
 $ engrammic install -y
-Detecting editors... found: Claude Code, Windsurf
+Detecting editors... found: Claude Code, Windsurf, Gemini CLI
 Using endpoint: https://beta.engrammic.ai/mcp/
 Configuring Claude Code... OK
 Configuring Windsurf... OK
+Configuring Gemini CLI... OK
 Installing skills... OK
 Done!
 
-$ engrammic install -y --tool=claude --endpoint=http://localhost:8000/mcp
-Configuring Claude Code... OK
+$ engrammic install -y --tool=cursor --method=file
+Configuring Cursor (file)... OK
+Done!
+
+$ engrammic install -y --tool=vscode --method=deeplink
+Opening VS Code deeplink... OK (manual confirmation required)
 Done!
 ```
 
@@ -560,7 +764,14 @@ Endpoint: http://localhost:8000/mcp
     "claude": {
       "installed_at": "2026-06-22T19:15:00Z",
       "config_path": "/home/user/.claude/settings.json",
-      "endpoint": "http://localhost:8000/mcp"
+      "endpoint": "http://localhost:8000/mcp",
+      "method": "file"
+    },
+    "cursor": {
+      "installed_at": "2026-06-22T19:15:00Z",
+      "config_path": "",
+      "endpoint": "http://localhost:8000/mcp",
+      "method": "deeplink"
     }
   }
 }
@@ -623,9 +834,14 @@ installer-go/
 
 1. `curl ... | sh` downloads binary and launches wizard
 2. Cloud install wizard configures selected editors in <30 seconds
-3. Selfhost wizard deploys working docker-compose stack
-4. `engrammic status` shows accurate installation state
-5. `engrammic doctor` catches common issues (port conflicts, missing docker, bad configs)
-6. `engrammic remove` cleanly removes only Engrammic entries
-7. Plain terminal mode works in SSH/CI environments
-8. Non-interactive mode (`-y`) works for automation
+3. Users can choose between file config and deeplink for dual-method editors
+4. Manual setup flow (JetBrains, Trae) provides clear instructions
+5. Project-level harnesses are handled appropriately
+6. All 12 skill destinations available
+7. Re-install gracefully handles existing configurations
+8. Selfhost wizard deploys working docker-compose stack
+9. `engrammic status` shows accurate installation state
+10. `engrammic doctor` catches common issues
+11. `engrammic remove` cleanly removes only Engrammic entries
+12. Plain terminal mode works in SSH/CI environments
+13. Non-interactive mode (`-y`) works for automation
