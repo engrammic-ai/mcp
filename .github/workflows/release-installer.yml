@@ -33,6 +33,10 @@ jobs:
             goarch: amd64
             os: windows-latest
             artifact: engrammic-x86_64-pc-windows-msvc.exe
+          - goos: windows
+            goarch: arm64
+            os: windows-latest
+            artifact: engrammic-aarch64-pc-windows-msvc.exe
 
     steps:
       - uses: actions/checkout@v4

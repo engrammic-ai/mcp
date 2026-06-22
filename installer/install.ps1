@@ -7,7 +7,8 @@ $ErrorActionPreference = "Stop"
 
 $Repo        = "engrammic-ai/mcp"
 $Binary      = "engrammic"
-$Target      = "x86_64-pc-windows-msvc"
+$Arch        = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "aarch64" } else { "x86_64" }
+$Target      = "$Arch-pc-windows-msvc"
 $InstallDir  = Join-Path $env:LOCALAPPDATA "engrammic\bin"
 $ReleaseBase = "https://github.com/$Repo/releases/latest/download"
 
