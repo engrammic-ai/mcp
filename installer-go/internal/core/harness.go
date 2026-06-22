@@ -336,6 +336,13 @@ func AllHarnesses() []Harness {
 			DeepLink:   deepLinkPtr(DeepLinkCursor),
 		},
 		{
+			Name:       "Cursor (file)",
+			ID:         "cursor-file",
+			ConfigPath: filepath.Join(home, ".cursor", "mcp.json"),
+			Method:     InstallMethodFileEdit,
+			Shape:      &ConfigShape{Kind: ConfigShapeJsonMap, Container: "mcpServers", TypeField: TypeFieldNone, UrlField: "url"},
+		},
+		{
 			Name:       "VS Code (Copilot)",
 			ID:         "vscode",
 			ConfigPath: filepath.Join(home, ".vscode", "extensions"), // detection marker
