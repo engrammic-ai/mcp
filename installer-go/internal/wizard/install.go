@@ -1,18 +1,17 @@
-// install.go — Cloud install wizard: Mode → Editors → Skills → Review → Execute.
 package wizard
 
 import (
 	"fmt"
+
+	"github.com/charmbracelet/huh"
 
 	"github.com/anthropics/engrammic/installer/internal/core"
 	"github.com/anthropics/engrammic/installer/internal/platform"
 	"github.com/anthropics/engrammic/installer/internal/ui"
 )
 
-// DefaultCloudEndpoint is the production Engrammic MCP endpoint.
 const DefaultCloudEndpoint = "https://beta.engrammic.ai/mcp/"
 
-// CloudInstallWizard returns a Wizard wired with all five cloud-install steps.
 func CloudInstallWizard() *Wizard {
 	return New("Engrammic Installer", []Step{
 		{Name: "Mode", Run: stepMode},
@@ -23,40 +22,37 @@ func CloudInstallWizard() *Wizard {
 	})
 }
 
-// ---------------------------------------------------------------------------
-// Step 1: Mode
-// ---------------------------------------------------------------------------
-
 func stepMode(w *Wizard) StepResult {
-	idx := ui.PlainSelect(
-		"How do you want to connect to Engrammic?",
-		[]string{
-			"Cloud (recommended) — connect to engrammic.ai",
-			"Self-hosted — run your own server with Docker",
-		},
-		0,
+	var mode string
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("How do you want to connect to Engrammic?").
+				Options(
+					huh.NewOption("Cloud (recommended)", "cloud"),
+					huh.NewOption("Self-hosted", "selfhost"),
+				).
+				Value(&mode),
+		),
 	)
 
-	switch idx {
-	case 0:
-		w.Mode = "cloud"
+	if err := form.Run(); err != nil {
+		return StepQuit
+	}
+
+	w.Mode = mode
+	if mode == "cloud" {
 		w.Endpoint = DefaultCloudEndpoint
-	default:
-		w.Mode = "selfhost"
 	}
 	return StepNext
 }
 
-// ---------------------------------------------------------------------------
-// Step 2: Editors
-// ---------------------------------------------------------------------------
-
 func stepEditors(w *Wizard) StepResult {
 	if w.Mode == "selfhost" {
-		return StepNext // selfhost wizard handles editors differently
+		return StepNext
 	}
 
-	// Populate harness choices on first visit.
 	if len(w.Harnesses) == 0 {
 		detected := platform.DetectEditors()
 		detectedIDs := make(map[string]bool, len(detected))
@@ -65,8 +61,6 @@ func stepEditors(w *Wizard) StepResult {
 		}
 
 		for _, h := range core.AllHarnesses() {
-			// Skip project-level (relative path) and PrintInstructions-only harnesses
-			// for the primary cloud wizard — users can configure those manually.
 			if !isAbsPath(h.ConfigPath) {
 				continue
 			}
@@ -81,23 +75,40 @@ func stepEditors(w *Wizard) StepResult {
 		}
 	}
 
-	// Build display names and current selection state.
-	names := make([]string, len(w.Harnesses))
-	selected := make([]bool, len(w.Harnesses))
+	options := make([]huh.Option[string], len(w.Harnesses))
 	for i, hc := range w.Harnesses {
-		names[i] = hc.Harness.Name
-		selected[i] = hc.Selected
+		options[i] = huh.NewOption(hc.Harness.Name, hc.Harness.ID)
 	}
 
-	fmt.Println()
-	ui.Title("Select editors to configure")
-	selected = ui.PlainMultiSelect("", names, selected)
+	var selected []string
+	for _, hc := range w.Harnesses {
+		if hc.Selected {
+			selected = append(selected, hc.Harness.ID)
+		}
+	}
 
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Select editors to configure").
+				Options(options...).
+				Value(&selected),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return StepBack
+	}
+
+	selectedMap := make(map[string]bool)
+	for _, id := range selected {
+		selectedMap[id] = true
+	}
 	for i := range w.Harnesses {
-		w.Harnesses[i].Selected = selected[i]
+		w.Harnesses[i].Selected = selectedMap[w.Harnesses[i].Harness.ID]
 	}
 
-	// For editors that support both file and deeplink, ask which method to use.
+	// For dual-method editors, ask which method
 	for i := range w.Harnesses {
 		hc := &w.Harnesses[i]
 		if !hc.Selected {
@@ -115,16 +126,11 @@ func stepEditors(w *Wizard) StepResult {
 	return StepNext
 }
 
-// ---------------------------------------------------------------------------
-// Step 3: Skills
-// ---------------------------------------------------------------------------
-
 func stepSkills(w *Wizard) StepResult {
 	if w.Mode == "selfhost" {
 		return StepNext
 	}
 
-	// Populate skill choices on first visit.
 	if len(w.Skills) == 0 {
 		for _, dest := range core.AllSkillDests() {
 			w.Skills = append(w.Skills, SkillChoice{
@@ -134,31 +140,45 @@ func stepSkills(w *Wizard) StepResult {
 		}
 	}
 
-	names := make([]string, len(w.Skills))
-	selected := make([]bool, len(w.Skills))
+	options := make([]huh.Option[string], len(w.Skills))
 	for i, sc := range w.Skills {
 		label := sc.Dest.Name
 		if sc.Dest.Note != nil {
 			label += fmt.Sprintf(" (%s)", *sc.Dest.Note)
 		}
-		names[i] = label
-		selected[i] = sc.Selected
+		options[i] = huh.NewOption(label, sc.Dest.Path)
 	}
 
-	fmt.Println()
-	ui.Title("Install Engrammic skills")
-	selected = ui.PlainMultiSelect("", names, selected)
+	var selected []string
+	for _, sc := range w.Skills {
+		if sc.Selected {
+			selected = append(selected, sc.Dest.Path)
+		}
+	}
 
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Install Engrammic skills").
+				Options(options...).
+				Value(&selected),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return StepBack
+	}
+
+	selectedMap := make(map[string]bool)
+	for _, path := range selected {
+		selectedMap[path] = true
+	}
 	for i := range w.Skills {
-		w.Skills[i].Selected = selected[i]
+		w.Skills[i].Selected = selectedMap[w.Skills[i].Dest.Path]
 	}
 
 	return StepNext
 }
-
-// ---------------------------------------------------------------------------
-// Step 4: Review
-// ---------------------------------------------------------------------------
 
 func stepReview(w *Wizard) StepResult {
 	fmt.Println()
@@ -169,7 +189,7 @@ func stepReview(w *Wizard) StepResult {
 
 	selectedHarnesses := w.SelectedHarnesses()
 	if len(selectedHarnesses) == 0 {
-		ui.Warn("No editors selected. Go back to select at least one editor.")
+		ui.Warn("No editors selected.")
 	} else {
 		fmt.Println("  Editors:")
 		for _, hc := range selectedHarnesses {
@@ -191,29 +211,37 @@ func stepReview(w *Wizard) StepResult {
 		fmt.Println()
 	}
 
-	idx := ui.PlainSelect(
-		"What would you like to do?",
-		[]string{"Install now", "Go back", "Cancel"},
-		0,
+	var action string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("").
+				Options(
+					huh.NewOption("Install now", "install"),
+					huh.NewOption("Go back", "back"),
+					huh.NewOption("Cancel", "cancel"),
+				).
+				Value(&action),
+		),
 	)
 
-	switch idx {
-	case 0:
+	if err := form.Run(); err != nil {
+		return StepQuit
+	}
+
+	switch action {
+	case "install":
 		if len(selectedHarnesses) == 0 {
-			ui.Warn("Select at least one editor before installing.")
+			ui.Warn("Select at least one editor.")
 			return StepStay
 		}
 		return StepNext
-	case 1:
+	case "back":
 		return StepBack
 	default:
 		return StepQuit
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Step 5: Execute
-// ---------------------------------------------------------------------------
 
 func stepExecute(w *Wizard) StepResult {
 	selected := w.SelectedHarnesses()
@@ -222,7 +250,6 @@ func stepExecute(w *Wizard) StepResult {
 		return StepBack
 	}
 
-	// Build the name list for the progress display.
 	names := make([]string, 0, len(selected))
 	for _, hc := range selected {
 		names = append(names, hc.Harness.Name)
@@ -238,7 +265,6 @@ func stepExecute(w *Wizard) StepResult {
 	ui.Title("Installing...")
 	fmt.Println(progress.Render())
 
-	// Run a background ticker to animate the spinner while installs run.
 	lineCount := len(names) + 1
 	stop := progress.StartTicker(func() {
 		fmt.Printf("\033[%dA", lineCount)
@@ -247,18 +273,15 @@ func stepExecute(w *Wizard) StepResult {
 
 	results := ExecuteConfigs(selected, w.Endpoint, progress)
 
-	// Mark skills as done (actual file writing is handled separately elsewhere).
 	if len(skillsSelected) > 0 {
 		progress.SetStatus("Skills", ui.StatusDone, "installed")
 	}
 
 	stop()
 
-	// Final render (move cursor up and redraw so the last frame is clean).
 	fmt.Printf("\033[%dA", lineCount)
 	fmt.Println(progress.Render())
 
-	// Persist state.
 	if err := UpdateState(w, results); err != nil {
 		ui.Warn("Could not save state: %v", err)
 	}
@@ -269,14 +292,6 @@ func stepExecute(w *Wizard) StepResult {
 	return StepNext
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// DefaultMethod returns the string method name based on a harness's primary
-// InstallMethod.  Harnesses that support both file and deeplink (i.e. have
-// both Shape and DeepLink set) default to deeplink.
-// Exported so the CLI non-interactive path can reuse it.
 func DefaultMethod(h core.Harness) string {
 	switch h.Method {
 	case core.InstallMethodDeepLink:
@@ -288,29 +303,27 @@ func DefaultMethod(h core.Harness) string {
 	}
 }
 
-// askInstallMethod prompts the user to pick between file-edit and deeplink
-// for a harness that supports both.  Returns "" if the user cancels.
 func askInstallMethod(h core.Harness) string {
-	idx := ui.PlainSelect(
-		fmt.Sprintf("How do you want to configure %s?", h.Name),
-		[]string{
-			fmt.Sprintf("Edit config file (%s)", h.ConfigPath),
-			"Open in editor via deeplink",
-		},
-		0,
+	var method string
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title(fmt.Sprintf("How do you want to configure %s?", h.Name)).
+				Options(
+					huh.NewOption(fmt.Sprintf("Edit config file (%s)", h.ConfigPath), "file"),
+					huh.NewOption("Open in editor via deeplink", "deeplink"),
+				).
+				Value(&method),
+		),
 	)
-	switch idx {
-	case 0:
-		return "file"
-	case 1:
-		return "deeplink"
-	default:
+
+	if err := form.Run(); err != nil {
 		return ""
 	}
+	return method
 }
 
-// isAbsPath reports whether a path starts with '/' (Unix) or a drive letter
-// (Windows).  Used to filter out project-relative config paths.
 func isAbsPath(p string) bool {
 	if len(p) == 0 {
 		return false
@@ -318,7 +331,6 @@ func isAbsPath(p string) bool {
 	if p[0] == '/' || p[0] == '\\' {
 		return true
 	}
-	// Windows: C:\...
 	if len(p) >= 3 && p[1] == ':' {
 		return true
 	}
