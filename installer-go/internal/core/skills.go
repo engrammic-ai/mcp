@@ -38,6 +38,7 @@ func AllSkillDests() []SkillDest {
 
 	claudePresent := dirExists(filepath.Join(home, ".claude"))
 	piPresent := dirExists(filepath.Join(home, ".pi/agent"))
+	veilPresent := dirExists(filepath.Join(home, ".veil"))
 	openclawPresent := dirExists(filepath.Join(home, ".openclaw"))
 	hermesPresent := dirExists(filepath.Join(home, ".hermes"))
 
@@ -62,7 +63,16 @@ func AllSkillDests() []SkillDest {
 			Path:    filepath.Join(home, ".pi/agent/skills"),
 			Scope:   SkillScopeUser,
 			Format:  SkillFormatDirectory,
-			Default: piPresent && !claudePresent,
+			Default: piPresent && !claudePresent && !veilPresent,
+			Note:    nil,
+		},
+		{
+			Name:    "\033[38;5;213mV\033[38;5;177me\033[38;5;141mi\033[38;5;105ml\033[0m",
+			Harness: "veil",
+			Path:    filepath.Join(home, ".veil/skills"),
+			Scope:   SkillScopeUser,
+			Format:  SkillFormatDirectory,
+			Default: veilPresent && !claudePresent,
 			Note:    nil,
 		},
 		{

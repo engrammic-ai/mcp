@@ -193,6 +193,13 @@ func AllHarnesses() []Harness {
 			Shape:      standardJSON,
 		},
 		{
+			Name:       "\033[38;5;213mV\033[38;5;177me\033[38;5;141mi\033[38;5;105ml\033[0m",
+			ID:         "veil",
+			ConfigPath: filepath.Join(home, ".veil", "mcp.json"),
+			Method:     InstallMethodFileEdit,
+			Shape:      standardJSON,
+		},
+		{
 			Name:       "Windsurf",
 			ID:         "windsurf",
 			ConfigPath: filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"),
