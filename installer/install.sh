@@ -140,17 +140,34 @@ _expected_hash=$(awk '{print $1}' "$TMP_SUM")
   → The checksum file may be missing or malformed.
   → Retry in a minute; if it persists, open an issue: https://github.com/${REPO}/issues"
 
-if command -v sha256sum >/dev/null 2>&1; then
-    # GNU coreutils (Linux + many macOS via brew)
-    printf '%s  %s\n' "$_expected_hash" "$TMP_BIN" | sha256sum --check --status \
-        || err "Checksum mismatch for ${BINARY}-${TARGET}.
+# ponytail: macOS has BSD sha256sum at /usr/bin that doesn't support --check;
+# prefer shasum on Darwin, sha256sum elsewhere
+_checksum_verified=0
+case "$(uname -s)" in
+    Darwin)
+        if command -v shasum >/dev/null 2>&1; then
+            printf '%s  %s\n' "$_expected_hash" "$TMP_BIN" | shasum -a 256 --check --status \
+                || err "Checksum mismatch for ${BINARY}-${TARGET}.
   → The download may be corrupt or tampered with. Please retry."
-    say "Checksum verified."
-elif command -v shasum >/dev/null 2>&1; then
-    # macOS built-in
-    printf '%s  %s\n' "$_expected_hash" "$TMP_BIN" | shasum -a 256 --check --status \
-        || err "Checksum mismatch for ${BINARY}-${TARGET}.
+            _checksum_verified=1
+        fi
+        ;;
+    *)
+        if command -v sha256sum >/dev/null 2>&1; then
+            printf '%s  %s\n' "$_expected_hash" "$TMP_BIN" | sha256sum --check --status \
+                || err "Checksum mismatch for ${BINARY}-${TARGET}.
   → The download may be corrupt or tampered with. Please retry."
+            _checksum_verified=1
+        elif command -v shasum >/dev/null 2>&1; then
+            printf '%s  %s\n' "$_expected_hash" "$TMP_BIN" | shasum -a 256 --check --status \
+                || err "Checksum mismatch for ${BINARY}-${TARGET}.
+  → The download may be corrupt or tampered with. Please retry."
+            _checksum_verified=1
+        fi
+        ;;
+esac
+
+if [ "$_checksum_verified" -eq 1 ]; then
     say "Checksum verified."
 else
     warn "No sha256sum or shasum found — skipping checksum verification.
