@@ -20,6 +20,19 @@ type State struct {
 	LastUpdated   time.Time               `json:"last_updated"`
 	Server        *ServerState            `json:"server,omitempty"`
 	Harnesses     map[string]HarnessState `json:"harnesses"`
+	Skills        *SkillsState            `json:"skills,omitempty"`
+}
+
+type SkillsState struct {
+	InstalledAt   time.Time         `json:"installed_at"`
+	SkillNames    []string          `json:"skill_names"`
+	Destinations  []SkillDestState  `json:"destinations"`
+}
+
+type SkillDestState struct {
+	Harness string `json:"harness"`
+	Path    string `json:"path"`
+	Format  int    `json:"format"`
 }
 
 type ServerState struct {

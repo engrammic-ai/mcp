@@ -319,13 +319,7 @@ func stepExecute(w *Wizard) StepResult {
 		}
 	}
 
-	// Skills (placeholder - actual writing not implemented yet)
-	skillsSelected := w.SelectedSkills()
-	if len(skillsSelected) > 0 {
-		ui.Success("%-22s installed", "Skills")
-	}
-
-	// Update state - only include selected harnesses
+	// Prepare new state
 	newState := &core.State{
 		Version:     1,
 		LastUpdated: time.Now(),
@@ -341,6 +335,41 @@ func stepExecute(w *Wizard) StepResult {
 			Endpoint:    w.Endpoint,
 		}
 	}
+
+	// Skills installation
+	skillsSelected := w.SelectedSkills()
+	if len(skillsSelected) > 0 {
+		ui.Info("%-22s fetching...", "Skills")
+		skills, err := core.FetchSkills()
+		if err != nil {
+			ui.Error("%-22s %v", "Skills", err)
+		} else if len(skills) == 0 {
+			ui.Warn("%-22s no skills found", "Skills")
+		} else {
+			// Convert SkillChoice to SkillDest
+			var dests []core.SkillDest
+			for _, sc := range skillsSelected {
+				dests = append(dests, sc.Dest)
+			}
+
+			// Cleanup old skills from deselected destinations
+			if state != nil && state.Skills != nil {
+				core.CleanupOldSkills(state.Skills, dests)
+			}
+
+			if err := core.InstallSkills(skills, dests); err != nil {
+				ui.Error("%-22s %v", "Skills", err)
+			} else {
+				ui.Success("%-22s %d skills to %d destinations", "Skills", len(skills), len(dests))
+				newState.Skills = core.BuildSkillsState(skills, dests)
+			}
+		}
+	} else if state != nil && state.Skills != nil {
+		// User deselected all skills - clean them up
+		core.CleanupOldSkills(state.Skills, nil)
+		ui.Info("%-22s removed", "Skills")
+	}
+
 	if err := newState.Save(); err != nil {
 		ui.Warn("Could not save state: %v", err)
 	}

@@ -1,0 +1,321 @@
+package core
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+const (
+	SkillsRepoURL    = "https://github.com/engrammic-ai/skills"
+	SkillsArchiveURL = "https://github.com/engrammic-ai/skills/archive/refs/heads/main.tar.gz"
+)
+
+// Skill represents a skill to install.
+type Skill struct {
+	Name    string // e.g. "engrammic-leap-guide"
+	Content string // SKILL.md content
+}
+
+// FetchSkills downloads skills from the GitHub repo.
+func FetchSkills() ([]Skill, error) {
+	resp, err := http.Get(SkillsArchiveURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch skills: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch skills: HTTP %d", resp.StatusCode)
+	}
+
+	return extractSkillsFromTarGz(resp.Body)
+}
+
+func extractSkillsFromTarGz(r io.Reader) ([]Skill, error) {
+	gzr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("gzip: %w", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	var skills []Skill
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar: %w", err)
+		}
+
+		// Look for skills/engrammic-*/SKILL.md
+		if !strings.HasSuffix(hdr.Name, "/SKILL.md") {
+			continue
+		}
+
+		parts := strings.Split(hdr.Name, "/")
+		if len(parts) < 3 {
+			continue
+		}
+
+		// parts: ["skills-main", "skills", "engrammic-leap-guide", "SKILL.md"]
+		skillDir := parts[len(parts)-2]
+		if !strings.HasPrefix(skillDir, "engrammic-") {
+			continue
+		}
+
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", hdr.Name, err)
+		}
+
+		skills = append(skills, Skill{
+			Name:    skillDir,
+			Content: string(content),
+		})
+	}
+
+	return skills, nil
+}
+
+// InstallSkills installs skills to the given destinations.
+func InstallSkills(skills []Skill, dests []SkillDest) error {
+	for _, dest := range dests {
+		if err := installSkillsToDest(skills, dest); err != nil {
+			return fmt.Errorf("install to %s: %w", dest.Name, err)
+		}
+	}
+	return nil
+}
+
+func installSkillsToDest(skills []Skill, dest SkillDest) error {
+	switch dest.Format {
+	case SkillFormatDirectory:
+		return installSkillsAsDirectories(skills, dest.Path)
+	case SkillFormatCursorMdc:
+		return installSkillsAsMdc(skills, dest.Path)
+	case SkillFormatGeminiMd:
+		return installSkillsAsGeminiMd(skills, dest.Path)
+	case SkillFormatAgentsMd:
+		return installSkillsAsAgentsMd(skills, dest.Path)
+	default:
+		return fmt.Errorf("unknown format: %d", dest.Format)
+	}
+}
+
+func installSkillsAsDirectories(skills []Skill, basePath string) error {
+	if err := os.MkdirAll(basePath, 0755); err != nil {
+		return err
+	}
+
+	for _, skill := range skills {
+		skillDir := filepath.Join(basePath, skill.Name)
+		if err := os.MkdirAll(skillDir, 0755); err != nil {
+			return err
+		}
+
+		skillFile := filepath.Join(skillDir, "SKILL.md")
+		if err := os.WriteFile(skillFile, []byte(skill.Content), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func installSkillsAsMdc(skills []Skill, basePath string) error {
+	if err := os.MkdirAll(basePath, 0755); err != nil {
+		return err
+	}
+
+	for _, skill := range skills {
+		// Convert SKILL.md to .mdc format (Cursor rules)
+		mdcFile := filepath.Join(basePath, skill.Name+".mdc")
+		content := convertToMdc(skill.Content)
+		if err := os.WriteFile(mdcFile, []byte(content), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func convertToMdc(skillContent string) string {
+	// Strip YAML frontmatter, keep content
+	lines := strings.Split(skillContent, "\n")
+	inFrontmatter := false
+	var contentLines []string
+
+	for i, line := range lines {
+		if i == 0 && line == "---" {
+			inFrontmatter = true
+			continue
+		}
+		if inFrontmatter && line == "---" {
+			inFrontmatter = false
+			continue
+		}
+		if !inFrontmatter {
+			contentLines = append(contentLines, line)
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(contentLines, "\n"))
+}
+
+func installSkillsAsGeminiMd(skills []Skill, filePath string) error {
+	return installSkillsAsMarkedFile(skills, filePath, "GEMINI.md")
+}
+
+func installSkillsAsAgentsMd(skills []Skill, filePath string) error {
+	return installSkillsAsMarkedFile(skills, filePath, "AGENTS.md")
+}
+
+func installSkillsAsMarkedFile(skills []Skill, filePath, fileType string) error {
+	dir := filepath.Dir(filePath)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+
+	// Read existing content if file exists
+	var existing string
+	if data, err := os.ReadFile(filePath); err == nil {
+		existing = string(data)
+	}
+
+	// Remove any existing engrammic sections
+	existing = removeEngrammicSections(existing)
+
+	// Build new content
+	var sb strings.Builder
+	sb.WriteString(strings.TrimSpace(existing))
+	if sb.Len() > 0 {
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("<!-- engrammic:start -->\n")
+	sb.WriteString("<!-- Auto-generated by Engrammic installer. Do not edit manually. -->\n\n")
+
+	for i, skill := range skills {
+		if i > 0 {
+			sb.WriteString("\n---\n\n")
+		}
+		sb.WriteString(convertToMdc(skill.Content))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\n<!-- engrammic:end -->\n")
+
+	return os.WriteFile(filePath, []byte(sb.String()), 0644)
+}
+
+func removeEngrammicSections(content string) string {
+	startMarker := "<!-- engrammic:start -->"
+	endMarker := "<!-- engrammic:end -->"
+
+	for {
+		startIdx := strings.Index(content, startMarker)
+		if startIdx == -1 {
+			break
+		}
+
+		endIdx := strings.Index(content[startIdx:], endMarker)
+		if endIdx == -1 {
+			// Malformed, remove from start marker to end
+			content = content[:startIdx]
+			break
+		}
+
+		endIdx += startIdx + len(endMarker)
+		content = content[:startIdx] + content[endIdx:]
+	}
+
+	return strings.TrimSpace(content)
+}
+
+// CleanupOldSkills removes skills from destinations that are no longer selected.
+func CleanupOldSkills(state *SkillsState, currentDests []SkillDest) error {
+	if state == nil {
+		return nil
+	}
+
+	// Build set of current destination paths
+	currentPaths := make(map[string]bool)
+	for _, d := range currentDests {
+		currentPaths[d.Path] = true
+	}
+
+	// Remove skills from old destinations not in current selection
+	for _, old := range state.Destinations {
+		if currentPaths[old.Path] {
+			continue
+		}
+
+		dest := SkillDest{
+			Path:   old.Path,
+			Format: SkillFormat(old.Format),
+		}
+		if err := removeSkillsFromDest(dest, state.SkillNames); err != nil {
+			// Log but continue
+			continue
+		}
+	}
+
+	return nil
+}
+
+func removeSkillsFromDest(dest SkillDest, skillNames []string) error {
+	switch dest.Format {
+	case SkillFormatDirectory:
+		for _, name := range skillNames {
+			skillDir := filepath.Join(dest.Path, name)
+			os.RemoveAll(skillDir)
+		}
+	case SkillFormatCursorMdc:
+		for _, name := range skillNames {
+			mdcFile := filepath.Join(dest.Path, name+".mdc")
+			os.Remove(mdcFile)
+		}
+	case SkillFormatGeminiMd, SkillFormatAgentsMd:
+		// These use markers, so just clear the engrammic section
+		if data, err := os.ReadFile(dest.Path); err == nil {
+			cleaned := removeEngrammicSections(string(data))
+			os.WriteFile(dest.Path, []byte(cleaned), 0644)
+		}
+	}
+	return nil
+}
+
+// BuildSkillsState creates a SkillsState from installed skills and destinations.
+func BuildSkillsState(skills []Skill, dests []SkillDest) *SkillsState {
+	names := make([]string, len(skills))
+	for i, s := range skills {
+		names[i] = s.Name
+	}
+
+	destStates := make([]SkillDestState, len(dests))
+	for i, d := range dests {
+		destStates[i] = SkillDestState{
+			Harness: d.Harness,
+			Path:    d.Path,
+			Format:  int(d.Format),
+		}
+	}
+
+	return &SkillsState{
+		InstalledAt:  time.Now(),
+		SkillNames:   names,
+		Destinations: destStates,
+	}
+}
